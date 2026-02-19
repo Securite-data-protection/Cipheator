@@ -1,0 +1,10 @@
+build/
+cmake-build-*/
+.idea/
+storage/
+client.log
+*.log
+server.key
+server.crt
+*.key
+*.cph
