@@ -21,6 +21,7 @@ struct ClientConfig {
   std::string default_key_storage = "server";
   size_t clipboard_max_bytes = 0;
   bool decrypt_to_temp = false;
+  bool demo_mode = false;
 };
 
 struct EncryptParams {

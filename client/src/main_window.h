@@ -30,6 +30,7 @@ class MainWindow : public QMainWindow {
   void onDecrypt();
   void onTerminate();
   void onPreviewDecrypted();
+  void onCopyTempPath();
 
  private:
   struct DecryptedItem {
@@ -44,13 +45,17 @@ class MainWindow : public QMainWindow {
 
   bool reencryptAll();
   bool promptPasswordChange();
+  bool promptPasswordChangeUnified();
   void updateSecureState();
   void addStatus(const QString& text);
+  QStringList selectedFilePaths() const;
+  void updateDecryptedActions();
 
   cipheator::ClientCore client_;
   QString username_;
   QString password_;
   std::string default_key_storage_;
+  bool demo_mode_ = false;
 
   QListWidget* file_list_ = nullptr;
   QListWidget* decrypted_list_ = nullptr;
@@ -58,6 +63,8 @@ class MainWindow : public QMainWindow {
   QComboBox* hash_combo_ = nullptr;
   QComboBox* key_storage_combo_ = nullptr;
   QCheckBox* temp_checkbox_ = nullptr;
+  QLabel* demo_label_ = nullptr;
+  QPushButton* copy_temp_btn_ = nullptr;
   QPushButton* encrypt_btn_ = nullptr;
   QPushButton* decrypt_btn_ = nullptr;
   QPushButton* terminate_btn_ = nullptr;

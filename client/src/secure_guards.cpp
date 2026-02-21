@@ -73,8 +73,8 @@ void SecureGuards::onClipboardChanged() {
   bool too_large = block_all || bytes > clipboard_max_bytes_ || has_urls || has_image;
   if (too_large) {
     clipboard_->clear();
-    QString reason = block_all ? "Clipboard activity detected"
-                               : QString("Clipboard limit exceeded (%1 bytes)").arg(bytes);
+    QString reason = block_all ? "Обнаружена активность буфера обмена"
+                               : QString("Превышен лимит буфера обмена (%1 байт)").arg(bytes);
     emit violationDetected(reason);
   }
 }

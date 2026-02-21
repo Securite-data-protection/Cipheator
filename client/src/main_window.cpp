@@ -4,11 +4,15 @@
 
 #include <algorithm>
 #include <QCheckBox>
+#include <QAbstractItemView>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QApplication>
+#include <QClipboard>
 #include <QFileDialog>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -152,55 +156,65 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
       username_(username),
       password_(password),
       default_key_storage_(config.default_key_storage) {
-  setWindowTitle("Cipheator");
+  setWindowTitle("Шифратор");
   auto* central = new QWidget(this);
   auto* layout = new QVBoxLayout(central);
 
-  auto* files_box = new QGroupBox("Selected Files", central);
+  demo_mode_ = config.demo_mode;
+  if (demo_mode_) {
+    demo_label_ = new QLabel("ДЕМО-РЕЖИМ", central);
+    demo_label_->setStyleSheet("QLabel { color: #b00020; font-weight: bold; }");
+    layout->addWidget(demo_label_);
+  }
+
+  auto* files_box = new QGroupBox("Выбранные файлы", central);
   auto* files_layout = new QVBoxLayout(files_box);
   file_list_ = new QListWidget(files_box);
-  auto* select_btn = new QPushButton("Select Files", files_box);
+  file_list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  auto* select_btn = new QPushButton("Выбрать файлы", files_box);
   connect(select_btn, &QPushButton::clicked, this, &MainWindow::onSelectFiles);
   files_layout->addWidget(file_list_);
   files_layout->addWidget(select_btn);
 
-  auto* settings_box = new QGroupBox("Settings", central);
-  auto* settings_layout = new QHBoxLayout(settings_box);
+  auto* encrypt_box = new QGroupBox("Шифрование", central);
+  auto* encrypt_layout = new QHBoxLayout(encrypt_box);
 
-  cipher_combo_ = new QComboBox(settings_box);
+  cipher_combo_ = new QComboBox(encrypt_box);
   cipher_combo_->addItem("AES-256-GCM");
   cipher_combo_->addItem("AES-256-CBC");
   cipher_combo_->addItem("DES-CBC");
   cipher_combo_->addItem("DES-ECB");
-  cipher_combo_->addItem("Kuznechik");
-  cipher_combo_->addItem("Magma");
+  cipher_combo_->addItem("Кузнечик");
+  cipher_combo_->addItem("Магма");
 
-  hash_combo_ = new QComboBox(settings_box);
+  hash_combo_ = new QComboBox(encrypt_box);
   hash_combo_->addItem("SHA-256");
-  hash_combo_->addItem("Streebog");
+  hash_combo_->addItem("Стрибог");
 
-  key_storage_combo_ = new QComboBox(settings_box);
-  key_storage_combo_->addItem("Server (default)");
-  key_storage_combo_->addItem("Client (embedded key)");
+  key_storage_combo_ = new QComboBox(encrypt_box);
+  key_storage_combo_->addItem("Сервер (по умолчанию)");
+  key_storage_combo_->addItem("Клиент (встроенный ключ)");
   if (default_key_storage_ == "client") {
     key_storage_combo_->setCurrentIndex(1);
   }
 
-  temp_checkbox_ = new QCheckBox("Decrypt to temp file (auto-clean)", settings_box);
-  temp_checkbox_->setChecked(config.decrypt_to_temp);
+  encrypt_layout->addWidget(new QLabel("Алгоритм:", encrypt_box));
+  encrypt_layout->addWidget(cipher_combo_);
+  encrypt_layout->addWidget(new QLabel("Хэш:", encrypt_box));
+  encrypt_layout->addWidget(hash_combo_);
+  encrypt_layout->addWidget(new QLabel("Хранение ключа:", encrypt_box));
+  encrypt_layout->addWidget(key_storage_combo_);
 
-  settings_layout->addWidget(new QLabel("Cipher:", settings_box));
-  settings_layout->addWidget(cipher_combo_);
-  settings_layout->addWidget(new QLabel("Hash:", settings_box));
-  settings_layout->addWidget(hash_combo_);
-  settings_layout->addWidget(new QLabel("Key storage:", settings_box));
-  settings_layout->addWidget(key_storage_combo_);
-  settings_layout->addWidget(temp_checkbox_);
+  auto* decrypt_box = new QGroupBox("Расшифрование", central);
+  auto* decrypt_layout = new QHBoxLayout(decrypt_box);
+  temp_checkbox_ = new QCheckBox("Расшифровывать во временный файл (авто-очистка)", decrypt_box);
+  temp_checkbox_->setChecked(config.decrypt_to_temp);
+  decrypt_layout->addWidget(temp_checkbox_);
 
   auto* actions_layout = new QHBoxLayout();
-  encrypt_btn_ = new QPushButton("Encrypt", central);
-  decrypt_btn_ = new QPushButton("Decrypt", central);
-  terminate_btn_ = new QPushButton("Terminate", central);
+  encrypt_btn_ = new QPushButton("Зашифровать", central);
+  decrypt_btn_ = new QPushButton("Расшифровать", central);
+  terminate_btn_ = new QPushButton("Завершить", central);
   terminate_btn_->setEnabled(false);
 
   connect(encrypt_btn_, &QPushButton::clicked, this, &MainWindow::onEncrypt);
@@ -211,36 +225,42 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
   actions_layout->addWidget(decrypt_btn_);
   actions_layout->addWidget(terminate_btn_);
 
-  auto* decrypted_box = new QGroupBox("Decrypted (in memory)", central);
+  auto* decrypted_box = new QGroupBox("Расшифрованные (в памяти)", central);
   auto* decrypted_layout = new QVBoxLayout(decrypted_box);
   decrypted_list_ = new QListWidget(decrypted_box);
   decrypted_layout->addWidget(decrypted_list_);
   auto* decrypted_actions = new QHBoxLayout();
-  preview_btn_ = new QPushButton("Preview", decrypted_box);
+  preview_btn_ = new QPushButton("Просмотр", decrypted_box);
   preview_btn_->setEnabled(false);
+  copy_temp_btn_ = new QPushButton("Копировать путь", decrypted_box);
+  copy_temp_btn_->setEnabled(false);
   connect(preview_btn_, &QPushButton::clicked, this, &MainWindow::onPreviewDecrypted);
-  connect(decrypted_list_, &QListWidget::currentRowChanged, this, [this](int row) {
-    preview_btn_->setEnabled(row >= 0);
+  connect(copy_temp_btn_, &QPushButton::clicked, this, &MainWindow::onCopyTempPath);
+  connect(decrypted_list_, &QListWidget::currentRowChanged, this, [this](int) {
+    updateDecryptedActions();
   });
   decrypted_actions->addWidget(preview_btn_);
+  decrypted_actions->addWidget(copy_temp_btn_);
   decrypted_actions->addStretch();
   decrypted_layout->addLayout(decrypted_actions);
 
-  status_label_ = new QLabel("Ready", central);
+  status_label_ = new QLabel("Готово", central);
+  status_label_->setVisible(false);
 
   layout->addWidget(files_box);
-  layout->addWidget(settings_box);
+  layout->addWidget(encrypt_box);
+  layout->addWidget(decrypt_box);
   layout->addLayout(actions_layout);
   layout->addWidget(decrypted_box);
-  layout->addWidget(status_label_);
+  // status_label_ hidden for cleaner UI
 
   setCentralWidget(central);
 
   guards_ = new SecureGuards(this, static_cast<size_t>(config.clipboard_max_bytes), this);
   connect(guards_, &SecureGuards::violationDetected, this, [this](const QString& reason) {
-    addStatus("Violation: " + reason);
+    addStatus("Нарушение: " + reason);
     reencryptAll();
-    QMessageBox::warning(this, "Security", "Security violation: " + reason);
+    QMessageBox::warning(this, "Безопасность", "Нарушение безопасности: " + reason);
   });
 }
 
@@ -259,7 +279,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
   }
 
-  if (!promptPasswordChange()) {
+  if (!promptPasswordChangeUnified()) {
     closing_ = false;
     event->ignore();
     return;
@@ -269,7 +289,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::onSelectFiles() {
-  QStringList files = QFileDialog::getOpenFileNames(this, "Select Files");
+  QStringList files = QFileDialog::getOpenFileNames(this, "Выберите файлы");
   if (files.isEmpty()) return;
   file_list_->clear();
   for (const auto& file : files) {
@@ -280,7 +300,7 @@ void MainWindow::onSelectFiles() {
 
 void MainWindow::onEncrypt() {
   if (file_list_->count() == 0) {
-    addStatus("No files selected");
+    addStatus("Файлы не выбраны");
     return;
   }
 
@@ -288,8 +308,8 @@ void MainWindow::onEncrypt() {
   cipheator::HashAlg hash = hash_from_index(hash_combo_->currentIndex());
   std::string key_storage = (key_storage_combo_->currentIndex() == 0) ? "server" : "client";
 
-  for (int i = 0; i < file_list_->count(); ++i) {
-    QString path = file_list_->item(i)->text();
+  QStringList targets = selectedFilePaths();
+  for (const auto& path : targets) {
     cipheator::EncryptParams params;
     params.username = username_.toStdString();
     params.password = password_.toStdString();
@@ -300,22 +320,22 @@ void MainWindow::onEncrypt() {
 
     cipheator::EncryptResult result;
     if (!client_.encrypt_file(params, &result)) {
-      addStatus("Encrypt failed: " + QString::fromStdString(result.message));
-      QMessageBox::warning(this, "Encrypt", "Failed: " + QString::fromStdString(result.message));
+      addStatus("Ошибка шифрования: " + QString::fromStdString(result.message));
+      QMessageBox::warning(this, "Шифрование", "Ошибка: " + QString::fromStdString(result.message));
       continue;
     }
-    addStatus("Encrypted: " + path);
+    addStatus("Зашифровано: " + path);
   }
 }
 
 void MainWindow::onDecrypt() {
   if (file_list_->count() == 0) {
-    addStatus("No files selected");
+    addStatus("Файлы не выбраны");
     return;
   }
 
-  for (int i = 0; i < file_list_->count(); ++i) {
-    QString path = file_list_->item(i)->text();
+  QStringList targets = selectedFilePaths();
+  for (const auto& path : targets) {
     cipheator::DecryptParams params;
     params.username = username_.toStdString();
     params.password = password_.toStdString();
@@ -323,8 +343,8 @@ void MainWindow::onDecrypt() {
 
     cipheator::DecryptResult result;
     if (!client_.decrypt_file(params, &result)) {
-      addStatus("Decrypt failed: " + QString::fromStdString(result.message));
-      QMessageBox::warning(this, "Decrypt", "Failed: " + QString::fromStdString(result.message));
+      addStatus("Ошибка расшифрования: " + QString::fromStdString(result.message));
+      QMessageBox::warning(this, "Расшифрование", "Ошибка: " + QString::fromStdString(result.message));
       continue;
     }
 
@@ -341,16 +361,16 @@ void MainWindow::onDecrypt() {
       if (write_temp_file(item.data, temp_path, &temp_err)) {
         item.temp_path = temp_path;
       } else {
-        addStatus("Temp file failed: " + QString::fromStdString(temp_err));
+        addStatus("Ошибка временного файла: " + QString::fromStdString(temp_err));
       }
     }
     decrypted_.push_back(std::move(item));
     auto* list_item = new QListWidgetItem(path, decrypted_list_);
     if (!decrypted_.back().temp_path.empty()) {
-      list_item->setToolTip("Temp file: " + QString::fromStdString(decrypted_.back().temp_path));
-      addStatus("Decrypted into memory (temp file): " + path);
+      list_item->setToolTip("Временный файл: " + QString::fromStdString(decrypted_.back().temp_path));
+      addStatus("Расшифровано в память (временный файл): " + path);
     } else {
-      addStatus("Decrypted into memory: " + path);
+      addStatus("Расшифровано в память: " + path);
     }
   }
 
@@ -359,7 +379,7 @@ void MainWindow::onDecrypt() {
 
 void MainWindow::onTerminate() {
   if (!reencryptAll()) {
-    QMessageBox::warning(this, "Terminate", "Failed to re-encrypt all files");
+    QMessageBox::warning(this, "Завершение", "Не удалось пере-зашифровать файлы");
   }
 }
 
@@ -383,11 +403,11 @@ void MainWindow::onPreviewDecrypted() {
                                 static_cast<int>(show));
   }
   if (size > show) {
-    content += "\n\n[Truncated]";
+    content += "\n\n[Обрезано]";
   }
 
   QDialog dialog(this);
-  dialog.setWindowTitle("Preview: " + item.filePath);
+  dialog.setWindowTitle("Просмотр: " + item.filePath);
   auto* layout = new QVBoxLayout(&dialog);
   auto* view = new QPlainTextEdit(&dialog);
   view->setReadOnly(true);
@@ -401,6 +421,22 @@ void MainWindow::onPreviewDecrypted() {
 
   dialog.resize(800, 600);
   dialog.exec();
+}
+
+void MainWindow::onCopyTempPath() {
+  int row = decrypted_list_->currentRow();
+  if (row < 0 || static_cast<size_t>(row) >= decrypted_.size()) {
+    return;
+  }
+  const auto& item = decrypted_[static_cast<size_t>(row)];
+  if (item.temp_path.empty()) {
+    QMessageBox::information(this, "Временный файл", "Для этого файла нет временного пути.");
+    return;
+  }
+  if (auto* clipboard = QApplication::clipboard()) {
+    clipboard->setText(QString::fromStdString(item.temp_path));
+  }
+  QMessageBox::information(this, "Временный файл", "Путь скопирован в буфер обмена.");
 }
 
 bool MainWindow::reencryptAll() {
@@ -444,28 +480,71 @@ bool MainWindow::reencryptAll() {
 
 bool MainWindow::promptPasswordChange() {
   bool ok = false;
-  QString new_password = QInputDialog::getText(this, "Change Password",
-                                               "New password:", QLineEdit::Password,
+  QString new_password = QInputDialog::getText(this, "Смена пароля",
+                                               "Новый пароль:", QLineEdit::Password,
                                                QString(), &ok);
   if (!ok || new_password.isEmpty()) {
     return false;
   }
 
-  QString confirm = QInputDialog::getText(this, "Change Password",
-                                          "Confirm new password:", QLineEdit::Password,
+  QString confirm = QInputDialog::getText(this, "Смена пароля",
+                                          "Подтвердите пароль:", QLineEdit::Password,
                                           QString(), &ok);
   if (!ok || confirm != new_password) {
-    QMessageBox::warning(this, "Change Password", "Passwords do not match");
+    QMessageBox::warning(this, "Смена пароля", "Пароли не совпадают");
     return false;
   }
 
   std::string err;
   if (!client_.change_password(username_.toStdString(), password_.toStdString(),
                                new_password.toStdString(), &err)) {
-    QMessageBox::warning(this, "Change Password", "Failed: " + QString::fromStdString(err));
+    QMessageBox::warning(this, "Смена пароля", "Ошибка: " + QString::fromStdString(err));
     return false;
   }
   password_ = new_password;
+  return true;
+}
+
+bool MainWindow::promptPasswordChangeUnified() {
+  QDialog dialog(this);
+  dialog.setWindowTitle("Смена пароля");
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* form = new QFormLayout();
+
+  auto* new_pass = new QLineEdit(&dialog);
+  auto* confirm = new QLineEdit(&dialog);
+  new_pass->setEchoMode(QLineEdit::Password);
+  confirm->setEchoMode(QLineEdit::Password);
+
+  form->addRow("Новый пароль:", new_pass);
+  form->addRow("Подтверждение:", confirm);
+  layout->addLayout(form);
+
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+
+  if (dialog.exec() != QDialog::Accepted) {
+    return false;
+  }
+
+  if (new_pass->text().isEmpty()) {
+    QMessageBox::warning(this, "Смена пароля", "Пароль не может быть пустым");
+    return false;
+  }
+  if (new_pass->text() != confirm->text()) {
+    QMessageBox::warning(this, "Смена пароля", "Пароли не совпадают");
+    return false;
+  }
+
+  std::string err;
+  if (!client_.change_password(username_.toStdString(), password_.toStdString(),
+                               new_pass->text().toStdString(), &err)) {
+    QMessageBox::warning(this, "Смена пароля", "Ошибка: " + QString::fromStdString(err));
+    return false;
+  }
+  password_ = new_pass->text();
   return true;
 }
 
@@ -473,11 +552,41 @@ void MainWindow::updateSecureState() {
   bool has_decrypted = !decrypted_.empty();
   terminate_btn_->setEnabled(has_decrypted);
   guards_->setSecureMode(has_decrypted);
-  if (preview_btn_) {
-    preview_btn_->setEnabled(has_decrypted && decrypted_list_->currentRow() >= 0);
-  }
+  updateDecryptedActions();
 }
 
 void MainWindow::addStatus(const QString& text) {
-  status_label_->setText(text);
+  if (status_label_) {
+    status_label_->setText(text);
+  }
+}
+
+QStringList MainWindow::selectedFilePaths() const {
+  QStringList out;
+  if (!file_list_) return out;
+  const auto items = file_list_->selectedItems();
+  if (!items.isEmpty()) {
+    for (const auto* item : items) {
+      if (item) out << item->text();
+    }
+    return out;
+  }
+  for (int i = 0; i < file_list_->count(); ++i) {
+    if (auto* item = file_list_->item(i)) {
+      out << item->text();
+    }
+  }
+  return out;
+}
+
+void MainWindow::updateDecryptedActions() {
+  int row = decrypted_list_ ? decrypted_list_->currentRow() : -1;
+  bool has_row = row >= 0 && static_cast<size_t>(row) < decrypted_.size();
+  if (preview_btn_) {
+    preview_btn_->setEnabled(has_row);
+  }
+  if (copy_temp_btn_) {
+    bool has_temp = has_row && !decrypted_[static_cast<size_t>(row)].temp_path.empty();
+    copy_temp_btn_->setEnabled(has_temp);
+  }
 }

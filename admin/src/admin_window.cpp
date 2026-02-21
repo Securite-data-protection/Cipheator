@@ -25,7 +25,7 @@ const char* kDevicesPath = "config/admin_devices.conf";
 
 AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
     : QMainWindow(parent), client_(config) {
-  setWindowTitle("Cipheator Admin");
+  setWindowTitle("Админ-панель");
 
   auto* central = new QWidget(this);
   auto* layout = new QVBoxLayout(central);
@@ -43,9 +43,9 @@ AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
   stats_view_ = new QPlainTextEdit(right_pane);
   stats_view_->setReadOnly(true);
 
-  right_layout->addWidget(new QLabel("Logs", right_pane));
+  right_layout->addWidget(new QLabel("Журналы", right_pane));
   right_layout->addWidget(log_view_);
-  right_layout->addWidget(new QLabel("User Stats", right_pane));
+  right_layout->addWidget(new QLabel("Статистика пользователей", right_pane));
   right_layout->addWidget(stats_view_);
 
   splitter->addWidget(device_list_);
@@ -53,18 +53,18 @@ AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
   splitter->addWidget(right_pane);
   splitter->setStretchFactor(2, 1);
 
-  status_label_ = new QLabel("Ready", central);
+  status_label_ = new QLabel("Готово", central);
 
   layout->addWidget(splitter);
   layout->addWidget(status_label_);
   setCentralWidget(central);
 
-  auto* toolbar = addToolBar("Actions");
-  QAction* add_action = toolbar->addAction("Add Device");
-  QAction* remove_action = toolbar->addAction("Remove Device");
-  QAction* alerts_action = toolbar->addAction("Refresh Alerts");
-  QAction* logs_action = toolbar->addAction("Refresh Logs");
-  QAction* stats_action = toolbar->addAction("Refresh Stats");
+  auto* toolbar = addToolBar("Действия");
+  QAction* add_action = toolbar->addAction("Добавить устройство");
+  QAction* remove_action = toolbar->addAction("Удалить устройство");
+  QAction* alerts_action = toolbar->addAction("Обновить тревоги");
+  QAction* logs_action = toolbar->addAction("Обновить журнал");
+  QAction* stats_action = toolbar->addAction("Обновить статистику");
 
   connect(add_action, &QAction::triggered, this, &AdminWindow::onAddDevice);
   connect(remove_action, &QAction::triggered, this, &AdminWindow::onRemoveDevice);
@@ -117,7 +117,7 @@ void AdminWindow::saveDevices() {
 void AdminWindow::updateDeviceList() {
   device_list_->clear();
   for (const auto& d : devices_) {
-    device_list_->addItem(QString::fromStdString(d.name + " (" + d.host + ":" + std::to_string(d.port) + ")"));
+  device_list_->addItem(QString::fromStdString(d.name + " (" + d.host + ":" + std::to_string(d.port) + ")"));
   }
 }
 
@@ -133,13 +133,13 @@ std::string AdminWindow::deviceKey(const cipheator::AdminDevice& device) const {
 
 void AdminWindow::onAddDevice() {
   bool ok = false;
-  QString name = QInputDialog::getText(this, "Add Device", "Name:", QLineEdit::Normal, "", &ok);
+  QString name = QInputDialog::getText(this, "Добавить устройство", "Имя:", QLineEdit::Normal, "", &ok);
   if (!ok || name.isEmpty()) return;
-  QString host = QInputDialog::getText(this, "Add Device", "Host:", QLineEdit::Normal, "127.0.0.1", &ok);
+  QString host = QInputDialog::getText(this, "Добавить устройство", "Хост:", QLineEdit::Normal, "127.0.0.1", &ok);
   if (!ok || host.isEmpty()) return;
-  int port = QInputDialog::getInt(this, "Add Device", "Port:", 7444, 1, 65535, 1, &ok);
+  int port = QInputDialog::getInt(this, "Добавить устройство", "Порт:", 7444, 1, 65535, 1, &ok);
   if (!ok) return;
-  QString token = QInputDialog::getText(this, "Add Device", "Admin token:", QLineEdit::Password, "", &ok);
+  QString token = QInputDialog::getText(this, "Добавить устройство", "Админ-токен:", QLineEdit::Password, "", &ok);
   if (!ok || token.isEmpty()) return;
 
   cipheator::AdminDevice d;
@@ -150,7 +150,7 @@ void AdminWindow::onAddDevice() {
   devices_.push_back(d);
   saveDevices();
   updateDeviceList();
-  addStatus("Device added");
+  addStatus("Устройство добавлено");
 }
 
 void AdminWindow::onRemoveDevice() {
@@ -159,13 +159,13 @@ void AdminWindow::onRemoveDevice() {
   devices_.erase(devices_.begin() + row);
   saveDevices();
   updateDeviceList();
-  addStatus("Device removed");
+  addStatus("Устройство удалено");
 }
 
 void AdminWindow::onRefreshAlerts() {
   auto* device = selectedDevice();
   if (!device) {
-    addStatus("Select a device");
+    addStatus("Выберите устройство");
     return;
   }
   std::string key = deviceKey(*device);
@@ -177,7 +177,7 @@ void AdminWindow::onRefreshAlerts() {
   uint64_t last_id = since_id;
   std::string err;
   if (!client_.get_alerts(*device, since_id, 200, &lines, &last_id, &err)) {
-    addStatus(QString::fromStdString("Alerts error: " + err));
+    addStatus(QString::fromStdString("Ошибка тревог: " + err));
     return;
   }
 
@@ -190,22 +190,22 @@ void AdminWindow::onRefreshAlerts() {
   }
 
   if (!lines.empty()) {
-    QMessageBox::information(this, "Alerts", "New alerts received: " + QString::number(lines.size()));
+    QMessageBox::information(this, "Тревоги", "Новых тревог: " + QString::number(lines.size()));
   }
-  addStatus("Alerts refreshed");
+  addStatus("Тревоги обновлены");
 }
 
 void AdminWindow::onRefreshLogs() {
   auto* device = selectedDevice();
   if (!device) {
-    addStatus("Select a device");
+    addStatus("Выберите устройство");
     return;
   }
 
   std::vector<std::string> lines;
   std::string err;
   if (!client_.get_logs(*device, 200, &lines, &err)) {
-    addStatus(QString::fromStdString("Logs error: " + err));
+    addStatus(QString::fromStdString("Ошибка журнала: " + err));
     return;
   }
 
@@ -215,20 +215,20 @@ void AdminWindow::onRefreshLogs() {
     text += "\n";
   }
   log_view_->setPlainText(text);
-  addStatus("Logs refreshed");
+  addStatus("Журнал обновлён");
 }
 
 void AdminWindow::onRefreshStats() {
   auto* device = selectedDevice();
   if (!device) {
-    addStatus("Select a device");
+    addStatus("Выберите устройство");
     return;
   }
 
   std::vector<std::string> lines;
   std::string err;
   if (!client_.get_stats(*device, 200, &lines, &err)) {
-    addStatus(QString::fromStdString("Stats error: " + err));
+    addStatus(QString::fromStdString("Ошибка статистики: " + err));
     return;
   }
 
@@ -238,7 +238,7 @@ void AdminWindow::onRefreshStats() {
     text += "\n";
   }
   stats_view_->setPlainText(text);
-  addStatus("Stats refreshed");
+  addStatus("Статистика обновлена");
 }
 
 void AdminWindow::onAutoRefresh() {

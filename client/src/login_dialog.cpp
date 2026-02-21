@@ -2,11 +2,12 @@
 
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QLineEdit>
 #include <QVBoxLayout>
 
 LoginDialog::LoginDialog(QWidget* parent) : QDialog(parent) {
-  setWindowTitle("Cipheator Login");
+  setWindowTitle("Вход в систему");
   auto* layout = new QVBoxLayout(this);
   auto* form = new QFormLayout();
 
@@ -16,17 +17,26 @@ LoginDialog::LoginDialog(QWidget* parent) : QDialog(parent) {
   pass_edit_ = new QLineEdit(this);
   pass_edit_->setEchoMode(QLineEdit::Password);
 
-  form->addRow("Server Host:", host_edit_);
-  form->addRow("Server Port:", port_edit_);
-  form->addRow("Username:", user_edit_);
-  form->addRow("Password:", pass_edit_);
+  form->addRow("Логин:", user_edit_);
+  form->addRow("Пароль:", pass_edit_);
 
   layout->addLayout(form);
+
+  auto* advanced_box = new QGroupBox("Дополнительно", this);
+  auto* advanced_layout = new QFormLayout(advanced_box);
+  advanced_layout->addRow("Сервер:", host_edit_);
+  advanced_layout->addRow("Порт:", port_edit_);
+  advanced_box->setStyleSheet("QGroupBox { color: #666666; }");
+  host_edit_->setStyleSheet("color: #666666;");
+  port_edit_->setStyleSheet("color: #666666;");
+  layout->addWidget(advanced_box);
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
   connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   layout->addWidget(buttons);
+
+  user_edit_->setFocus();
 }
 
 void LoginDialog::setDefaults(const QString& host, int port) {

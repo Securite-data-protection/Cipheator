@@ -4,6 +4,7 @@
 #include "cipheator/config.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QMessageBox>
 
 #include <filesystem>
@@ -11,6 +12,7 @@
 
 int main(int argc, char** argv) {
   QApplication app(argc, argv);
+  app.setWindowIcon(QIcon(":/app/assets/app_icon.svg"));
 
   cipheator::Config config;
   bool loaded = config.load("config/client.conf");
@@ -40,10 +42,11 @@ int main(int argc, char** argv) {
   client_cfg.default_key_storage = config.get("default_key_storage", "server");
   client_cfg.clipboard_max_bytes = static_cast<size_t>(config.get_int("clipboard_max_bytes", 0));
   client_cfg.decrypt_to_temp = config.get_bool("decrypt_to_temp", false);
+  client_cfg.demo_mode = config.get_bool("demo_mode", false);
 
   if (!loaded) {
-    QMessageBox::warning(nullptr, "Cipheator",
-                         "config/client.conf not found. Using defaults; TLS may fail.");
+    QMessageBox::warning(nullptr, "Шифратор",
+                         "Файл config/client.conf не найден. Используются значения по умолчанию; TLS может не работать.");
   }
 
   LoginDialog login;

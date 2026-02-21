@@ -17,6 +17,7 @@ if(BUILD_GUI)
     src/login_dialog.h
     src/secure_guards.cpp
     src/secure_guards.h
+    resources.qrc
     ${CLIENT_SOURCES}
   )
   target_include_directories(cipheator-client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
