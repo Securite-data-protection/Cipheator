@@ -6,11 +6,14 @@
 #include <sstream>
 #include <cstdlib>
 #include <chrono>
+#include <fstream>
+#include <vector>
 
 #if defined(_WIN32)
 #include <process.h>
 #else
 #include <unistd.h>
+#include <sys/wait.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -56,10 +59,40 @@ class TempDir {
 GostCli::GostCli(GostCliConfig config) : config_(std::move(config)) {}
 
 bool GostCli::run_command(const std::string& cmd, std::string* err) {
-  int code = std::system(cmd.c_str());
+  fs::path log_path = fs::temp_directory_path() /
+                      ("cipheator_gost_cmd_" +
+#if defined(_WIN32)
+                       std::to_string(_getpid()) +
+#else
+                       std::to_string(getpid()) +
+#endif
+                       "_" + std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()) +
+                       ".log");
+  std::string wrapped = cmd + " > " + quote_path(log_path.string()) + " 2>&1";
+  int code = std::system(wrapped.c_str());
+  std::string output;
+  {
+    std::ifstream in(log_path);
+    if (in) {
+      std::ostringstream ss;
+      ss << in.rdbuf();
+      output = ss.str();
+    }
+    std::error_code ec;
+    fs::remove(log_path, ec);
+  }
   if (code != 0) {
     if (err) {
-      *err = "Command failed: " + cmd;
+      int exit_code = code;
+#if !defined(_WIN32)
+      if (WIFEXITED(code)) {
+        exit_code = WEXITSTATUS(code);
+      }
+#endif
+      *err = "Command failed (exit=" + std::to_string(exit_code) + "): " + cmd;
+      if (!output.empty()) {
+        *err += " | output: " + output;
+      }
     }
     return false;
   }
@@ -90,13 +123,23 @@ bool GostCli::encrypt(Cipher cipher,
   }
 
   std::ostringstream cmd;
-  cmd << enc_cmd << " " << quote_path(input_path.string());
-  if (!run_command(cmd.str(), err)) return false;
-
-  fs::path enc_path = input_path;
-  enc_path += config_.enc_suffix;
-  fs::path key_path = input_path;
-  key_path += config_.key_suffix;
+  fs::path enc_path = temp.path() / "encrypted.bin";
+  fs::path key_path = temp.path() / "key.bin";
+  cmd << enc_cmd << " " << quote_path(input_path.string()) << " "
+      << quote_path(enc_path.string()) << " " << quote_path(key_path.string());
+  std::string first_err;
+  if (!run_command(cmd.str(), &first_err)) {
+    // Fallback for binaries that accept only two arguments.
+    std::ostringstream cmd2;
+    cmd2 << enc_cmd << " " << quote_path(input_path.string()) << " "
+         << quote_path(enc_path.string());
+    if (!run_command(cmd2.str(), err)) {
+      if (err) {
+        *err = first_err + " | fallback failed: " + *err;
+      }
+      return false;
+    }
+  }
 
   bool ok = false;
   out->data = read_file(enc_path.string(), &ok);
@@ -104,6 +147,20 @@ bool GostCli::encrypt(Cipher cipher,
     if (err) *err = "Failed to read encrypted file";
     return false;
   }
+
+  if (!fs::exists(key_path)) {
+    std::vector<fs::path> candidates = {
+        enc_path.string() + config_.key_suffix,
+        input_path.string() + config_.key_suffix,
+    };
+    for (const auto& p : candidates) {
+      if (fs::exists(p)) {
+        key_path = p;
+        break;
+      }
+    }
+  }
+
   out->key = read_file(key_path.string(), &ok);
   if (!ok) {
     if (err) *err = "Failed to read key file";
@@ -122,10 +179,9 @@ bool GostCli::decrypt(Cipher cipher,
   if (!out) return false;
 
   TempDir temp;
-  fs::path enc_path = temp.path() / "input.bin";
-  enc_path += config_.enc_suffix;
-  fs::path key_path = temp.path() / "input.bin";
-  key_path += config_.key_suffix;
+  fs::path enc_path = temp.path() / "encrypted.bin";
+  fs::path out_path = temp.path() / "output.bin";
+  fs::path key_path = temp.path() / "key.bin";
 
   if (!write_file(enc_path.string(), ciphertext)) {
     if (err) *err = "Failed to write temp encrypted file";
@@ -148,19 +204,8 @@ bool GostCli::decrypt(Cipher cipher,
 
   std::ostringstream cmd;
   cmd << dec_cmd << " " << quote_path(enc_path.string()) << " "
-      << quote_path(key_path.string());
+      << quote_path(out_path.string()) << " " << quote_path(key_path.string());
   if (!run_command(cmd.str(), err)) return false;
-
-  fs::path out_path = enc_path;
-  std::string enc_suffix = config_.enc_suffix;
-  if (!enc_suffix.empty()) {
-    std::string out_str = out_path.string();
-    if (out_str.size() >= enc_suffix.size() &&
-        out_str.substr(out_str.size() - enc_suffix.size()) == enc_suffix) {
-      out_str = out_str.substr(0, out_str.size() - enc_suffix.size());
-      out_path = out_str;
-    }
-  }
 
   bool ok = false;
   out->data = read_file(out_path.string(), &ok);
