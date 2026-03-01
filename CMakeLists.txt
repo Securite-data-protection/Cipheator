@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(cipheator LANGUAGES CXX)
+project(cipheator VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,4 +24,8 @@ endif()
 
 if(BUILD_ADMIN)
   add_subdirectory(admin)
+endif()
+
+if(BUILD_CLIENT)
+  include(${CMAKE_SOURCE_DIR}/cmake/Packaging.cmake)
 endif()

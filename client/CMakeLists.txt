@@ -23,6 +23,7 @@ if(BUILD_GUI)
   target_include_directories(cipheator-client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(cipheator-client PRIVATE cipheator_common Qt6::Widgets)
   target_compile_definitions(cipheator-client PRIVATE CIPHEATOR_GUI)
+  install(TARGETS cipheator-client RUNTIME DESTINATION .)
 else()
   add_executable(cipheator-client
     src/cli_main.cpp
@@ -30,4 +31,5 @@ else()
   )
   target_include_directories(cipheator-client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(cipheator-client PRIVATE cipheator_common)
+  install(TARGETS cipheator-client RUNTIME DESTINATION .)
 endif()

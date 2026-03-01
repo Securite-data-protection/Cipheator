@@ -11,7 +11,7 @@ Secure client-server file encryption system (C++17). This repository contains:
 
 - CMake 3.20+
 - C++17 compiler
-- OpenSSL 1.1.1+ (TLS + AES/DES + SHA-256 + PBKDF2)
+- OpenSSL 1.1.1+ (TLS + AES-GCM/ChaCha20-Poly1305 + SHA-2/SHA-3 + PBKDF2)
 - Qt 6 (Widgets) for GUI client
 - Qt 6 (Widgets) for admin console
 
@@ -56,6 +56,24 @@ openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 
 Encrypted files use a single-file container format with an embedded header that stores
 metadata (cipher, hash, key storage, IV/tag, file_id, hash_value). Legacy `.cph/.key`
 sidecars are still accepted for backward compatibility.
+
+## Supported crypto profiles
+
+Encryption (client UI):
+- AES-256-GCM, AES-192-GCM, AES-128-GCM
+- ChaCha20-Poly1305
+- AES-256-CTR, AES-256-CFB, AES-256-OFB, AES-256-CBC
+- DES-CBC, DES-ECB (legacy/demo)
+- KUZNECHIK, MAGMA (GOST via external CLI binaries)
+
+Hashing:
+- SHA-256, SHA-512
+- SHA3-256, SHA3-512
+- BLAKE2b-512
+- STREEBOG-256 (if OpenSSL GOST digest is available)
+
+For GOST ciphers the UI provides conditional mode selection for demo scenarios.
+The actual encryption mode is defined by your external GOST binary implementation.
 
 ## Admin console
 
