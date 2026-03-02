@@ -1,21 +1,20 @@
-# Cipheator
+# Продвинутый многофункциональный программно-аппаратный комплекс шифрования
 
-Secure client-server file encryption system (C++17). This repository contains:
+Проект разделен на 4 конфишгурации:
 
-- `client/` Qt-based GUI client (optional CLI client placeholder)
-- `server/` TLS server that performs crypto and key storage
-- `admin/` Qt-based admin console for alerts/logs
-- `common/` shared libraries (protocol, crypto helpers, secure memory)
+- `client/` Основанный на Qt6 GUI-интерфейс для оборудования рядового пользователя
+- `server/` Сервер, на котором происходят криптографические процессы (внедрен и используется на отдельном аппарате)
+- `admin/` Панель администратора для просмотра логов и выдачи ручного разрешения при конфликтах
+- `common/` основные конфигируции, общие для всех клиентов
 
-## Dependencies
+## Зависимости
 
 - CMake 3.20+
 - C++17 compiler
 - OpenSSL 1.1.1+ (TLS + AES-GCM/ChaCha20-Poly1305 + SHA-2/SHA-3 + PBKDF2)
-- Qt 6 (Widgets) for GUI client
-- Qt 6 (Widgets) for admin console
+- Qt 6 (Widgets) для графического интерфейса
 
-## Build
+## Сборка
 
 ```bash
 cmake -S . -B build \
@@ -25,10 +24,11 @@ cmake -S . -B build \
   -DBUILD_ADMIN=ON
 cmake --build build
 ```
+Для каждой опции нужно выбрать, собрать конфигурацию или нет конкретно для данного устройства.
+Если Qt6 не доступен, небходимо установить `-DBUILD_GUI=OFF`, тогда будет доступен CLI-интерйес
 
-If Qt 6 is not available, set `-DBUILD_GUI=OFF` and implement the CLI client (stub included).
-
-## Server setup
+<!--
+## Установка сервера
 
 1. Create TLS cert and key:
 
@@ -42,39 +42,41 @@ openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 
 ```bash
 ./cipheator-server --init-user admin StrongPassword123
 ```
-
-## Run
+-->
+## Запуск
 
 ```bash
-./cipheator-server
 ./cipheator-client
-./cipheator-admin
 ```
+На физическом аппарате сервер и панель администратора запускаются сразу после включения в сеть питания
 
-## Client metadata
+### Шифрование
 
-Encrypted files use a single-file container format with an embedded header that stores
-metadata (cipher, hash, key storage, IV/tag, file_id, hash_value). Legacy `.cph/.key`
-sidecars are still accepted for backward compatibility.
+Зашифрованные файлы содержат в начале метаданные: шифр, хэш, тип хранилища ключа, IV/tag,
+ID файла в системе. Корректно используемые файлы расшифровываются обратно гарантированно, если же нарушена целостность, то появится предупреждение об этом
 
-## Supported crypto profiles
+### Поддерживаемые алгоритмы и режимы
 
-Encryption (client UI):
-- AES-256-GCM, AES-192-GCM, AES-128-GCM
-- ChaCha20-Poly1305
-- AES-256-CTR, AES-256-CFB, AES-256-OFB, AES-256-CBC
-- DES-CBC, DES-ECB (legacy/demo)
-- KUZNECHIK, MAGMA (GOST via external CLI binaries)
+Шифрование:
+- "Кузнечик" и "Магма"
+    - c режимами: MAC, MGM, ECB, CBC, CTR, CFB, OFB
+- AES-128, AES-192, AES-256
+    - с режимами: ECB, CBC, CFB, OFB, CTR, GCM, CCM, XTS, OCB
+- DES
+    - с режимами: ECB, CBC, CFR, OFB, CTR
+- TWOFISH-128, TWOFISH-192, TWOFISH-256:
+    - с режимами: ECB, CBC, CFB, OFB, CTR, GCM, CCM, XTS, OCB
 
-Hashing:
+- ChaCha20, ChaCha20-Poly1305
+- RC4, RC4-40, RC4-128
+
+Хеш-функции:
+- Стрибог-256, Стрибог-512
 - SHA-256, SHA-512
 - SHA3-256, SHA3-512
 - BLAKE2b-512
-- STREEBOG-256 (if OpenSSL GOST digest is available)
 
-For GOST ciphers the UI provides conditional mode selection for demo scenarios.
-The actual encryption mode is defined by your external GOST binary implementation.
-
+<!--
 ## Admin console
 
 Set `admin_token` in `config/server.conf` and add devices in the admin console.
@@ -88,25 +90,24 @@ Alerts include:
 - bulk file operations in a short window
 
 Thresholds are configurable in `config/server.conf`.
+-->
+## Проверка целостности
 
-## Integrity checks
+При наличии `file_id` сервер проверяет целостность при расшифровке, повторно
+вычисляя сохраненный хэш. Если хэш не совпадает, сервер возвращает ошибку и регистрирует
+предупреждение `integrity_failed`.
 
-When a `file_id` is present, the server verifies integrity on decrypt by recomputing
-the stored hash. If the hash doesn't match, the server returns an error and logs
-an `integrity_failed` alert.
+## Поиск аномалий в поведении
 
-## Anomaly lockouts (optional)
+Вы можете настроить временные блокировки из-за подозрительного времени, неудачных входов в систему или массовых операций
+с помощью параметров `anomaly_*_lock_sec` в `config/server.conf`. Установите значение `0`, чтобы отключить
+блокировку (только для оповещений).
 
-You can configure temporary lockouts for suspicious time, failed logins, or bulk operations
-via the `anomaly_*_lock_sec` settings in `config/server.conf`. Set to `0` to disable
-blocking (alerts only).
+## Режим временного файла (необязательно)
 
-## Temp file mode (optional)
-
-The client can write decrypted data into a temporary file (auto-cleaned on terminate)
-to allow external apps (e.g., DB tools) to access data. Enable `decrypt_to_temp=true`
-in `config/client.conf` or use the UI toggle.
-
+Клиент может записывать расшифрованные данные во временный файл (автоматически очищаемый при завершении работы)
+чтобы разрешить внешним приложениям (например, инструментам базы данных) доступ к данным. 
+<!--
 ## GOST CLI integration
 
 The server expects GOST CLI tools:
@@ -119,13 +120,14 @@ Set their paths in `config/server.conf`. The adapter currently assumes:
 
 Adjust the config or adapter if your tools use different filenames.
 
+
 ## Streebog hashing
 
 Streebog hashing is attempted via OpenSSL digests (`streebog256` or `md_gost12_256`).
 If your OpenSSL build does not include GOST engines, Streebog will fail until you add
 an engine/provider that implements GOST 34.11-2012.
+-->
+## Замечания по безопасности
 
-## Security notes
-
-This is a reference implementation. Some platform security controls (clipboard, screenshots, firewall) are best-effort and OS-limited.
-See `client/SECURITY_NOTES.md` for limitations.
+Некоторые элементы управления безопасностью платформы (буфер обмена, скриншоты, брандмауэр) являются наиболее эффективными и ограничены операционной системой.
+Более эфективно использовать интегрировать комплекс в систему безопасности. Ограничения приведены в разделе `client/SECURITY_NOTES.md`.

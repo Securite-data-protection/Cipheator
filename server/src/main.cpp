@@ -575,6 +575,44 @@ void handle_change_password(ServerContext& ctx,
   }, resp);
 }
 
+void handle_auth_check(ServerContext& ctx,
+                       cipheator::TlsStream& stream,
+                       const cipheator::Header& req) {
+  const std::string username = req.get("username");
+  const std::string password = req.get("password");
+
+  if (ctx.monitor) {
+    int64_t remaining = 0;
+    if (ctx.monitor->is_locked(username, &remaining)) {
+      if (ctx.audit) {
+        ctx.audit->log_event("auth_locked", username,
+                             "auth_check remaining_sec=" + std::to_string(remaining));
+      }
+      send_error(stream, "Account locked. Try again in " + std::to_string(remaining) + "s");
+      return;
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(ctx.users_mutex);
+    if (!ctx.users.verify(username, password)) {
+      if (ctx.monitor) ctx.monitor->record_login_failure(username);
+      if (ctx.audit) ctx.audit->log_event("auth_failed", username, "auth_check");
+      send_error(stream, "Authentication failed");
+      return;
+    }
+  }
+  if (ctx.monitor) ctx.monitor->record_login_success(username);
+  if (ctx.audit) ctx.audit->log_event("auth_ok", username, "auth_check");
+
+  cipheator::Header resp;
+  resp.set("status", "ok");
+  resp.set("message", "Authentication successful");
+  cipheator::write_header([&](const uint8_t* buf, size_t len) {
+    return stream.write(buf, len);
+  }, resp);
+}
+
 void handle_session(ServerContext& ctx, cipheator::Socket client) {
   cipheator::TlsStream stream;
   std::string err;
@@ -597,6 +635,8 @@ void handle_session(ServerContext& ctx, cipheator::Socket client) {
     handle_decrypt(ctx, stream, req);
   } else if (op == "change_password") {
     handle_change_password(ctx, stream, req);
+  } else if (op == "auth_check") {
+    handle_auth_check(ctx, stream, req);
   } else {
     send_error(stream, "Unknown operation");
   }

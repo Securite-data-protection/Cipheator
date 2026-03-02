@@ -668,4 +668,25 @@ bool ClientCore::change_password(const std::string& username,
   return true;
 }
 
+bool ClientCore::authenticate(const std::string& username,
+                              const std::string& password,
+                              std::string* err) {
+  Header header;
+  header.set("op", "auth_check");
+  header.set("username", username);
+  header.set("password", password);
+
+  Header resp;
+  std::vector<uint8_t> out;
+  if (!send_request(header, {}, &resp, &out)) {
+    if (err) *err = "Request failed";
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (err) *err = resp.get("message", "Authentication failed");
+    return false;
+  }
+  return true;
+}
+
 } // namespace cipheator

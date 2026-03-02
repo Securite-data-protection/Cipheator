@@ -71,6 +71,9 @@ class ClientCore {
                     EncryptResult* result,
                     bool write_to_disk);
   bool decrypt_file(const DecryptParams& params, DecryptResult* result);
+  bool authenticate(const std::string& username,
+                    const std::string& password,
+                    std::string* err);
   bool change_password(const std::string& username,
                        const std::string& password,
                        const std::string& new_password,

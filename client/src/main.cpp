@@ -1,5 +1,6 @@
 #include "main_window.h"
 #include "login_dialog.h"
+#include "client_core.h"
 
 #include "cipheator/config.h"
 
@@ -259,20 +260,39 @@ int main(int argc, char** argv) {
                          "Файл config/client.conf не найден. Используются значения по умолчанию; TLS может не работать.");
   }
 
-  LoginDialog login;
-  login.setDefaults(QString::fromStdString(client_cfg.host), client_cfg.port);
-  if (login.exec() != QDialog::Accepted) {
-    return 0;
+  QString session_user;
+  QString session_pass;
+  for (;;) {
+    LoginDialog login;
+    login.setDefaults(QString::fromStdString(client_cfg.host), client_cfg.port);
+    if (login.exec() != QDialog::Accepted) {
+      return 0;
+    }
+
+    client_cfg.host = login.host().toStdString();
+    client_cfg.port = login.port();
+
+    cipheator::ClientCore auth_client(client_cfg);
+    std::string auth_err;
+    if (!auth_client.authenticate(login.username().toStdString(),
+                                  login.password().toStdString(),
+                                  &auth_err)) {
+      QMessageBox::warning(nullptr, "Вход в систему",
+                           "Ошибка авторизации: " + QString::fromStdString(auth_err));
+      continue;
+    }
+
+    session_user = login.username();
+    session_pass = login.password();
+    break;
   }
 
-  client_cfg.host = login.host().toStdString();
-  client_cfg.port = login.port();
   update_config_values(config_path, {
       {"server_host", client_cfg.host},
       {"server_port", std::to_string(client_cfg.port)}
   });
 
-  MainWindow window(client_cfg, login.username(), login.password());
+  MainWindow window(client_cfg, session_user, session_pass);
   window.show();
 
   return app.exec();
