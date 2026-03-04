@@ -13,10 +13,13 @@
 #include "admin_server.h"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <thread>
 #include <memory>
+#include <sstream>
+#include <unordered_map>
 #include <vector>
 
 #include <openssl/rand.h>
@@ -34,6 +37,8 @@ struct ServerContext {
   std::string storage_dir;
   std::string keys_dir;
   std::string hashes_dir;
+  std::string admin_token;
+  std::string binding_db_path;
 
   cipheator::GostCli gost;
   cipheator::CryptoEngine crypto;
@@ -43,6 +48,16 @@ struct ServerContext {
   std::unique_ptr<cipheator::AuditService> audit;
   std::unique_ptr<cipheator::SecurityMonitor> monitor;
   std::unique_ptr<cipheator::AdminServer> admin_server;
+
+  struct ClientBindingRecord {
+    bool allowed = false;
+    int64_t first_seen_ts = 0;
+    int64_t last_seen_ts = 0;
+    std::string label;
+  };
+  std::mutex binding_mutex;
+  bool binding_enabled = false;
+  std::unordered_map<std::string, ClientBindingRecord> client_bindings;
 
   size_t max_header_bytes = 65536;
   size_t max_file_bytes = 100 * 1024 * 1024;
@@ -164,6 +179,134 @@ void send_error(cipheator::TlsStream& stream, const std::string& message) {
   }, header);
 }
 
+void send_payload(cipheator::TlsStream& stream,
+                  const cipheator::Header& header,
+                  const std::string& payload) {
+  if (!cipheator::write_header([&](const uint8_t* buf, size_t len) {
+        return stream.write(buf, len);
+      }, header)) {
+    return;
+  }
+  if (payload.empty()) return;
+  size_t total = 0;
+  while (total < payload.size()) {
+    int n = stream.write(reinterpret_cast<const uint8_t*>(payload.data()) + total,
+                         payload.size() - total);
+    if (n <= 0) return;
+    total += static_cast<size_t>(n);
+  }
+}
+
+std::string sanitize_label(std::string label) {
+  for (char& c : label) {
+    if (c == '|') c = '/';
+  }
+  return label;
+}
+
+void save_binding_policy(ServerContext& ctx) {
+  if (ctx.binding_db_path.empty()) return;
+  std::ofstream out(ctx.binding_db_path, std::ios::trunc);
+  if (!out) return;
+  out << "enabled=" << (ctx.binding_enabled ? "1" : "0") << "\n";
+  for (const auto& kv : ctx.client_bindings) {
+    const auto& id = kv.first;
+    const auto& rec = kv.second;
+    out << "client|" << id << "|"
+        << (rec.allowed ? "1" : "0") << "|"
+        << rec.first_seen_ts << "|"
+        << rec.last_seen_ts << "|"
+        << sanitize_label(rec.label) << "\n";
+  }
+}
+
+void load_binding_policy(ServerContext& ctx) {
+  ctx.client_bindings.clear();
+  ctx.binding_enabled = false;
+  std::ifstream in(ctx.binding_db_path);
+  if (!in) return;
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    if (line.rfind("enabled=", 0) == 0) {
+      ctx.binding_enabled = (line.substr(8) == "1");
+      continue;
+    }
+    if (line.rfind("client|", 0) != 0) continue;
+    std::vector<std::string> parts;
+    std::stringstream ss(line);
+    std::string part;
+    while (std::getline(ss, part, '|')) {
+      parts.push_back(part);
+    }
+    if (parts.size() < 6) continue;
+    ServerContext::ClientBindingRecord rec;
+    rec.allowed = (parts[2] == "1");
+    try {
+      rec.first_seen_ts = std::stoll(parts[3]);
+      rec.last_seen_ts = std::stoll(parts[4]);
+    } catch (...) {
+      rec.first_seen_ts = 0;
+      rec.last_seen_ts = 0;
+    }
+    rec.label = parts[5];
+    ctx.client_bindings[parts[1]] = rec;
+  }
+}
+
+void register_client(ServerContext& ctx,
+                     const std::string& client_id,
+                     const std::string& client_label) {
+  const int64_t now = cipheator::now_epoch_sec();
+  std::lock_guard<std::mutex> lock(ctx.binding_mutex);
+  auto it = ctx.client_bindings.find(client_id);
+  if (it == ctx.client_bindings.end()) {
+    ServerContext::ClientBindingRecord rec;
+    rec.allowed = !ctx.binding_enabled;
+    rec.first_seen_ts = now;
+    rec.last_seen_ts = now;
+    rec.label = sanitize_label(client_label);
+    ctx.client_bindings[client_id] = rec;
+    save_binding_policy(ctx);
+    return;
+  }
+  it->second.last_seen_ts = now;
+  if (!client_label.empty()) {
+    it->second.label = sanitize_label(client_label);
+  }
+  save_binding_policy(ctx);
+}
+
+bool is_client_allowed(ServerContext& ctx, const std::string& client_id) {
+  std::lock_guard<std::mutex> lock(ctx.binding_mutex);
+  if (!ctx.binding_enabled) return true;
+  auto it = ctx.client_bindings.find(client_id);
+  if (it == ctx.client_bindings.end()) return false;
+  return it->second.allowed;
+}
+
+bool enforce_client_binding(ServerContext& ctx,
+                            cipheator::TlsStream& stream,
+                            const cipheator::Header& req,
+                            const std::string& username,
+                            const std::string& op) {
+  std::string client_id = req.get("client_id");
+  std::string client_host = req.get("client_host", "unknown");
+  if (client_id.empty()) {
+    client_id = "unknown";
+  }
+  register_client(ctx, client_id, client_host);
+  if (is_client_allowed(ctx, client_id)) {
+    return true;
+  }
+  if (ctx.audit) {
+    ctx.audit->log_alert("client_binding_block", username,
+                         "op=" + op + " client_id=" + client_id + " host=" + client_host);
+  }
+  send_error(stream, "Client is not allowed by binding policy");
+  return false;
+}
+
 void handle_encrypt(ServerContext& ctx,
                     cipheator::TlsStream& stream,
                     const cipheator::Header& req) {
@@ -183,6 +326,11 @@ void handle_encrypt(ServerContext& ctx,
 
   if (file_size > ctx.max_file_bytes) {
     send_error(stream, "File too large");
+    return;
+  }
+
+  if (!enforce_client_binding(ctx, stream, req, username, "encrypt")) {
+    discard_payload(stream, file_size);
     return;
   }
 
@@ -315,8 +463,15 @@ void handle_encrypt(ServerContext& ctx,
   if (!crypto_result.tag.empty()) {
     cipheator::secure_zero(crypto_result.tag.data(), crypto_result.tag.size());
   }
-  if (ctx.monitor) ctx.monitor->record_file_op(username, "encrypt", 1);
-  if (ctx.audit) ctx.audit->log_event("encrypt", username, file_name);
+  if (ctx.monitor) ctx.monitor->record_file_op(username, "encrypt", 1, file_size);
+  if (ctx.audit) {
+    std::ostringstream detail;
+    detail << "file=" << file_name
+           << " file_size=" << file_size
+           << " enc_size=" << crypto_result.data.size()
+           << " cipher=" << cipher_str;
+    ctx.audit->log_event("encrypt", username, detail.str());
+  }
 }
 
 void handle_decrypt(ServerContext& ctx,
@@ -341,6 +496,11 @@ void handle_decrypt(ServerContext& ctx,
 
   if (file_size > ctx.max_file_bytes) {
     send_error(stream, "File too large");
+    return;
+  }
+
+  if (!enforce_client_binding(ctx, stream, req, username, "decrypt")) {
+    discard_payload(stream, file_size);
     return;
   }
 
@@ -532,8 +692,15 @@ void handle_decrypt(ServerContext& ctx,
   if (!tag.empty()) {
     cipheator::secure_zero(tag.data(), tag.size());
   }
-  if (ctx.monitor) ctx.monitor->record_file_op(username, "decrypt", 1);
-  if (ctx.audit) ctx.audit->log_event("decrypt", username, "ok");
+  if (ctx.monitor) ctx.monitor->record_file_op(username, "decrypt", 1, crypto_result.data.size());
+  if (ctx.audit) {
+    std::ostringstream detail;
+    detail << "file_id=" << file_id
+           << " enc_size=" << file_size
+           << " plain_size=" << crypto_result.data.size()
+           << " cipher=" << cipher_str;
+    ctx.audit->log_event("decrypt", username, detail.str());
+  }
 }
 
 void handle_change_password(ServerContext& ctx,
@@ -542,6 +709,10 @@ void handle_change_password(ServerContext& ctx,
   std::string username = req.get("username");
   std::string password = req.get("password");
   std::string new_password = req.get("new_password");
+
+  if (!enforce_client_binding(ctx, stream, req, username, "change_password")) {
+    return;
+  }
 
   if (ctx.monitor) {
     int64_t remaining = 0;
@@ -580,6 +751,10 @@ void handle_auth_check(ServerContext& ctx,
                        const cipheator::Header& req) {
   const std::string username = req.get("username");
   const std::string password = req.get("password");
+
+  if (!enforce_client_binding(ctx, stream, req, username, "auth_check")) {
+    return;
+  }
 
   if (ctx.monitor) {
     int64_t remaining = 0;
@@ -629,7 +804,218 @@ void handle_session(ServerContext& ctx, cipheator::Socket client) {
   }
 
   std::string op = req.get("op");
-  if (op == "encrypt") {
+  if (op.rfind("admin_", 0) == 0) {
+    if (ctx.admin_token.empty() || req.get("admin_token") != ctx.admin_token) {
+      send_error(stream, "Unauthorized");
+      return;
+    }
+
+    if (op == "admin_get_alerts") {
+      uint64_t since_id = 0;
+      size_t limit = 100;
+      try {
+        if (!req.get("since_id").empty()) {
+          since_id = std::stoull(req.get("since_id"));
+        }
+        if (!req.get("limit").empty()) {
+          limit = static_cast<size_t>(std::stoull(req.get("limit")));
+        }
+      } catch (...) {
+        send_error(stream, "Invalid parameters");
+        return;
+      }
+
+      std::ostringstream payload;
+      uint64_t last_id = since_id;
+      auto alerts = ctx.audit ? ctx.audit->get_alerts_since(since_id, limit)
+                              : std::vector<cipheator::AlertRecord>();
+      for (const auto& alert : alerts) {
+        payload << cipheator::format_alert_line(alert) << "\n";
+        if (alert.id > last_id) last_id = alert.id;
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("payload_size", std::to_string(payload.str().size()));
+      resp.set("last_id", std::to_string(last_id));
+      send_payload(stream, resp, payload.str());
+      return;
+    }
+
+    if (op == "admin_get_logs") {
+      size_t limit = 200;
+      try {
+        if (!req.get("limit").empty()) {
+          limit = static_cast<size_t>(std::stoull(req.get("limit")));
+        }
+      } catch (...) {
+        send_error(stream, "Invalid parameters");
+        return;
+      }
+      std::ostringstream payload;
+      auto lines = ctx.audit ? ctx.audit->tail_logs(limit) : std::vector<std::string>();
+      for (const auto& line : lines) {
+        payload << line << "\n";
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("payload_size", std::to_string(payload.str().size()));
+      send_payload(stream, resp, payload.str());
+      return;
+    }
+
+    if (op == "admin_get_stats") {
+      size_t limit = 200;
+      try {
+        if (!req.get("limit").empty()) {
+          limit = static_cast<size_t>(std::stoull(req.get("limit")));
+        }
+      } catch (...) {
+        send_error(stream, "Invalid parameters");
+        return;
+      }
+      std::ostringstream payload;
+      auto lines = ctx.monitor ? ctx.monitor->dump_stats(limit) : std::vector<std::string>();
+      for (const auto& line : lines) {
+        payload << line << "\n";
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("payload_size", std::to_string(payload.str().size()));
+      send_payload(stream, resp, payload.str());
+      return;
+    }
+
+    if (op == "admin_get_locks") {
+      size_t limit = 200;
+      try {
+        if (!req.get("limit").empty()) {
+          limit = static_cast<size_t>(std::stoull(req.get("limit")));
+        }
+      } catch (...) {
+        send_error(stream, "Invalid parameters");
+        return;
+      }
+      std::ostringstream payload;
+      auto lines = ctx.monitor ? ctx.monitor->dump_locks(limit) : std::vector<std::string>();
+      for (const auto& line : lines) {
+        payload << line << "\n";
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("payload_size", std::to_string(payload.str().size()));
+      send_payload(stream, resp, payload.str());
+      return;
+    }
+
+    if (op == "admin_unlock_user") {
+      std::string username = req.get("username");
+      if (username.empty()) {
+        send_error(stream, "Missing username");
+        return;
+      }
+      bool ok = ctx.monitor && ctx.monitor->unlock_user(username);
+      if (!ok) {
+        send_error(stream, "User not found");
+        return;
+      }
+      if (ctx.audit) {
+        ctx.audit->log_event("admin_unlock_user", "admin", username);
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("message", "User unlocked");
+      cipheator::write_header([&](const uint8_t* buf, size_t len) {
+        return stream.write(buf, len);
+      }, resp);
+      return;
+    }
+
+    if (op == "admin_get_binding") {
+      size_t limit = 500;
+      try {
+        if (!req.get("limit").empty()) {
+          limit = static_cast<size_t>(std::stoull(req.get("limit")));
+        }
+      } catch (...) {
+        send_error(stream, "Invalid parameters");
+        return;
+      }
+      std::ostringstream payload;
+      {
+        std::lock_guard<std::mutex> lock(ctx.binding_mutex);
+        size_t n = 0;
+        for (const auto& kv : ctx.client_bindings) {
+          payload << kv.first << "|"
+                  << (kv.second.allowed ? "1" : "0") << "|"
+                  << kv.second.first_seen_ts << "|"
+                  << kv.second.last_seen_ts << "|"
+                  << kv.second.label << "\n";
+          ++n;
+          if (limit > 0 && n >= limit) break;
+        }
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("binding_enabled", ctx.binding_enabled ? "1" : "0");
+      resp.set("payload_size", std::to_string(payload.str().size()));
+      send_payload(stream, resp, payload.str());
+      return;
+    }
+
+    if (op == "admin_set_binding") {
+      std::string enabled = req.get("enabled");
+      bool en = (enabled == "1" || enabled == "true");
+      {
+        std::lock_guard<std::mutex> lock(ctx.binding_mutex);
+        ctx.binding_enabled = en;
+        save_binding_policy(ctx);
+      }
+      if (ctx.audit) {
+        ctx.audit->log_event("admin_set_binding", "admin", en ? "enabled" : "disabled");
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("message", en ? "Binding enabled" : "Binding disabled");
+      cipheator::write_header([&](const uint8_t* buf, size_t len) {
+        return stream.write(buf, len);
+      }, resp);
+      return;
+    }
+
+    if (op == "admin_set_client_allowed") {
+      std::string client_id = req.get("client_id");
+      if (client_id.empty()) {
+        send_error(stream, "Missing client_id");
+        return;
+      }
+      bool allowed = (req.get("allowed") == "1" || req.get("allowed") == "true");
+      {
+        std::lock_guard<std::mutex> lock(ctx.binding_mutex);
+        auto& rec = ctx.client_bindings[client_id];
+        if (rec.first_seen_ts == 0) {
+          rec.first_seen_ts = cipheator::now_epoch_sec();
+          rec.last_seen_ts = rec.first_seen_ts;
+          rec.label = "manual";
+        }
+        rec.allowed = allowed;
+        save_binding_policy(ctx);
+      }
+      if (ctx.audit) {
+        ctx.audit->log_event("admin_set_client_allowed", "admin",
+                             client_id + "=" + (allowed ? "1" : "0"));
+      }
+      cipheator::Header resp;
+      resp.set("status", "ok");
+      resp.set("message", allowed ? "Client allowed" : "Client blocked");
+      cipheator::write_header([&](const uint8_t* buf, size_t len) {
+        return stream.write(buf, len);
+      }, resp);
+      return;
+    }
+
+    send_error(stream, "Unknown admin operation");
+    return;
+  } else if (op == "encrypt") {
     handle_encrypt(ctx, stream, req);
   } else if (op == "decrypt") {
     handle_decrypt(ctx, stream, req);
@@ -716,10 +1102,31 @@ int main(int argc, char** argv) {
   monitor_cfg.lock_failed_login_sec = static_cast<int64_t>(config.get_int("anomaly_failed_login_lock_sec", 0));
   monitor_cfg.lock_bulk_files_sec = static_cast<int64_t>(config.get_int("anomaly_bulk_files_lock_sec", 0));
   monitor_cfg.lock_suspicious_time_sec = static_cast<int64_t>(config.get_int("anomaly_time_lock_sec", 0));
+  monitor_cfg.decrypt_burst_threshold = static_cast<size_t>(config.get_int("anomaly_decrypt_burst_threshold", 20));
+  monitor_cfg.decrypt_burst_window_sec = static_cast<int64_t>(config.get_int("anomaly_decrypt_burst_window_sec", 60));
+  monitor_cfg.decrypt_volume_threshold_mb = static_cast<size_t>(config.get_int("anomaly_decrypt_volume_threshold_mb", 256));
+  monitor_cfg.decrypt_volume_window_sec = static_cast<int64_t>(config.get_int("anomaly_decrypt_volume_window_sec", 300));
+  monitor_cfg.profile_min_decrypt_samples = static_cast<size_t>(config.get_int("anomaly_profile_min_decrypt_samples", 20));
+  try {
+    monitor_cfg.profile_decrypt_rate_factor = std::stod(config.get("anomaly_profile_decrypt_rate_factor", "3.0"));
+  } catch (...) {
+    monitor_cfg.profile_decrypt_rate_factor = 3.0;
+  }
+  try {
+    monitor_cfg.profile_decrypt_bytes_factor = std::stod(config.get("anomaly_profile_decrypt_bytes_factor", "4.0"));
+  } catch (...) {
+    monitor_cfg.profile_decrypt_bytes_factor = 4.0;
+  }
 
   std::string stats_path = (fs::path(ctx.storage_dir) / "user_stats.db").string();
   ctx.monitor = std::make_unique<cipheator::SecurityMonitor>(monitor_cfg, ctx.audit.get(), stats_path);
   ctx.monitor->load_stats();
+  ctx.binding_db_path = (fs::path(ctx.storage_dir) / "client_binding.db").string();
+  load_binding_policy(ctx);
+  if (config.get_bool("client_binding_enabled", false)) {
+    ctx.binding_enabled = true;
+    save_binding_policy(ctx);
+  }
 
   if (argc == 4 && std::string(argv[1]) == "--init-user") {
     std::string username = argv[2];
@@ -742,6 +1149,7 @@ int main(int argc, char** argv) {
   }
 
   std::string admin_token = config.get("admin_token");
+  ctx.admin_token = admin_token;
   std::string admin_host = config.get("admin_host", "0.0.0.0");
   int admin_port = config.get_int("admin_port", 7444);
   if (!admin_token.empty()) {

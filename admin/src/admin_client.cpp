@@ -7,6 +7,17 @@
 
 namespace cipheator {
 
+namespace {
+
+std::string normalize_host(const std::string& host) {
+  if (host == "0.0.0.0" || host == "::") {
+    return "127.0.0.1";
+  }
+  return host;
+}
+
+} // namespace
+
 AdminClient::AdminClient(AdminConfig config) : config_(std::move(config)) {}
 
 bool AdminClient::send_request(const AdminDevice& device,
@@ -22,7 +33,8 @@ bool AdminClient::send_request(const AdminDevice& device,
 
   Socket socket;
   std::string conn_err;
-  if (!socket.connect_to(device.host, device.port, &conn_err)) {
+  const std::string target_host = normalize_host(device.host);
+  if (!socket.connect_to(target_host, device.port, &conn_err)) {
     if (err) *err = "Connect failed: " + conn_err;
     return false;
   }
@@ -35,7 +47,7 @@ bool AdminClient::send_request(const AdminDevice& device,
   }
 
   TlsStream stream;
-  if (!stream.connect(std::move(socket), tls_ctx, device.host, &conn_err)) {
+  if (!stream.connect(std::move(socket), tls_ctx, target_host, &conn_err)) {
     if (err) *err = "TLS connect failed: " + conn_err;
     return false;
   }
@@ -183,6 +195,128 @@ bool AdminClient::get_stats(const AdminDevice& device,
     while (std::getline(ss, line)) {
       if (!line.empty()) lines->push_back(line);
     }
+  }
+  return true;
+}
+
+bool AdminClient::get_locks(const AdminDevice& device,
+                            size_t limit,
+                            std::vector<std::string>* lines,
+                            std::string* err) {
+  Header header;
+  header.set("op", "admin_get_locks");
+  header.set("admin_token", device.token);
+  header.set("limit", std::to_string(limit));
+
+  Header resp;
+  std::string payload;
+  if (!send_request(device, header, &resp, &payload, err)) {
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (err) *err = resp.get("message", "Server error");
+    return false;
+  }
+  if (lines) {
+    lines->clear();
+    std::istringstream ss(payload);
+    std::string line;
+    while (std::getline(ss, line)) {
+      if (!line.empty()) lines->push_back(line);
+    }
+  }
+  return true;
+}
+
+bool AdminClient::get_binding(const AdminDevice& device,
+                              size_t limit,
+                              bool* enabled,
+                              std::vector<std::string>* lines,
+                              std::string* err) {
+  Header header;
+  header.set("op", "admin_get_binding");
+  header.set("admin_token", device.token);
+  header.set("limit", std::to_string(limit));
+
+  Header resp;
+  std::string payload;
+  if (!send_request(device, header, &resp, &payload, err)) {
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (err) *err = resp.get("message", "Server error");
+    return false;
+  }
+  if (enabled) {
+    *enabled = (resp.get("binding_enabled") == "1" || resp.get("binding_enabled") == "true");
+  }
+  if (lines) {
+    lines->clear();
+    std::istringstream ss(payload);
+    std::string line;
+    while (std::getline(ss, line)) {
+      if (!line.empty()) lines->push_back(line);
+    }
+  }
+  return true;
+}
+
+bool AdminClient::set_binding(const AdminDevice& device, bool enabled, std::string* err) {
+  Header header;
+  header.set("op", "admin_set_binding");
+  header.set("admin_token", device.token);
+  header.set("enabled", enabled ? "1" : "0");
+
+  Header resp;
+  std::string payload;
+  if (!send_request(device, header, &resp, &payload, err)) {
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (err) *err = resp.get("message", "Server error");
+    return false;
+  }
+  return true;
+}
+
+bool AdminClient::set_client_allowed(const AdminDevice& device,
+                                     const std::string& client_id,
+                                     bool allowed,
+                                     std::string* err) {
+  Header header;
+  header.set("op", "admin_set_client_allowed");
+  header.set("admin_token", device.token);
+  header.set("client_id", client_id);
+  header.set("allowed", allowed ? "1" : "0");
+
+  Header resp;
+  std::string payload;
+  if (!send_request(device, header, &resp, &payload, err)) {
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (err) *err = resp.get("message", "Server error");
+    return false;
+  }
+  return true;
+}
+
+bool AdminClient::unlock_user(const AdminDevice& device,
+                              const std::string& username,
+                              std::string* err) {
+  Header header;
+  header.set("op", "admin_unlock_user");
+  header.set("admin_token", device.token);
+  header.set("username", username);
+
+  Header resp;
+  std::string payload;
+  if (!send_request(device, header, &resp, &payload, err)) {
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (err) *err = resp.get("message", "Server error");
+    return false;
   }
   return true;
 }

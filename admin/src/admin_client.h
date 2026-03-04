@@ -42,6 +42,26 @@ class AdminClient {
                  std::vector<std::string>* lines,
                  std::string* err);
 
+  bool get_locks(const AdminDevice& device,
+                 size_t limit,
+                 std::vector<std::string>* lines,
+                 std::string* err);
+
+  bool get_binding(const AdminDevice& device,
+                   size_t limit,
+                   bool* enabled,
+                   std::vector<std::string>* lines,
+                   std::string* err);
+
+  bool set_binding(const AdminDevice& device, bool enabled, std::string* err);
+  bool set_client_allowed(const AdminDevice& device,
+                          const std::string& client_id,
+                          bool allowed,
+                          std::string* err);
+  bool unlock_user(const AdminDevice& device,
+                   const std::string& username,
+                   std::string* err);
+
  private:
   bool send_request(const AdminDevice& device,
                     const Header& header,

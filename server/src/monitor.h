@@ -7,6 +7,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -25,6 +26,13 @@ struct MonitorConfig {
   int64_t lock_failed_login_sec = 0;
   int64_t lock_bulk_files_sec = 0;
   int64_t lock_suspicious_time_sec = 0;
+  size_t decrypt_burst_threshold = 20;
+  int64_t decrypt_burst_window_sec = 60;
+  size_t decrypt_volume_threshold_mb = 256;
+  int64_t decrypt_volume_window_sec = 300;
+  size_t profile_min_decrypt_samples = 20;
+  double profile_decrypt_rate_factor = 3.0;
+  double profile_decrypt_bytes_factor = 4.0;
 };
 
 struct UserStats {
@@ -32,9 +40,16 @@ struct UserStats {
   uint32_t total_logins = 0;
   std::deque<int64_t> failed_login_times;
   std::deque<int64_t> file_op_times;
+  std::deque<int64_t> decrypt_times;
+  std::deque<std::pair<int64_t, size_t>> decrypt_size_times;
+  uint64_t total_decrypt_ops = 0;
+  uint64_t total_decrypt_bytes = 0;
   int64_t last_failed_alert_ts = 0;
   int64_t last_bulk_alert_ts = 0;
   int64_t last_time_alert_ts = 0;
+  int64_t last_decrypt_rate_alert_ts = 0;
+  int64_t last_decrypt_volume_alert_ts = 0;
+  uint32_t strike_level = 0;
   int64_t lock_until_ts = 0;
 };
 
@@ -46,10 +61,13 @@ class SecurityMonitor {
   void record_login_failure(const std::string& username);
   void record_file_op(const std::string& username,
                       const std::string& op,
-                      size_t count);
+                      size_t count,
+                      size_t bytes);
   bool is_locked(const std::string& username, int64_t* remaining_sec);
+  bool unlock_user(const std::string& username);
 
   std::vector<std::string> dump_stats(size_t limit);
+  std::vector<std::string> dump_locks(size_t limit);
   bool load_stats();
 
  private:
