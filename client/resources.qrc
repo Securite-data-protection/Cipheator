@@ -1,5 +1,6 @@
 <RCC>
   <qresource prefix="/app">
     <file>assets/app_icon.svg</file>
+    <file>assets/checkmark.svg</file>
   </qresource>
 </RCC>

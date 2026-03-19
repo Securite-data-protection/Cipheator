@@ -7,9 +7,12 @@
 #include "cipheator/protocol.h"
 #include "cipheator/tls.h"
 
+#include <openssl/sha.h>
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <algorithm>
@@ -186,6 +189,56 @@ bool extract_metadata_from_header(const Header& hdr,
     }
   }
   return true;
+}
+
+std::string host_label() {
+  const char* host = std::getenv("HOSTNAME");
+#if defined(_WIN32)
+  if (!host || !*host) {
+    host = std::getenv("COMPUTERNAME");
+  }
+#endif
+  if (host && *host) return host;
+  return "unknown-host";
+}
+
+std::string user_label() {
+  const char* user = std::getenv("USER");
+#if defined(_WIN32)
+  if (!user || !*user) {
+    user = std::getenv("USERNAME");
+  }
+#endif
+  if (user && *user) return user;
+  return "unknown-user";
+}
+
+std::string home_label() {
+  const char* home = std::getenv("HOME");
+#if defined(_WIN32)
+  if (!home || !*home) {
+    home = std::getenv("USERPROFILE");
+  }
+#endif
+  if (home && *home) return home;
+  return "";
+}
+
+std::string client_id_value() {
+  static std::string cached;
+  if (!cached.empty()) return cached;
+  std::string seed = host_label() + "|" + user_label() + "|" + home_label();
+  unsigned char hash[SHA256_DIGEST_LENGTH];
+  SHA256(reinterpret_cast<const unsigned char*>(seed.data()),
+         seed.size(),
+         hash);
+  static const char* kHex = "0123456789abcdef";
+  cached.reserve(SHA256_DIGEST_LENGTH * 2);
+  for (size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+    cached.push_back(kHex[(hash[i] >> 4) & 0xF]);
+    cached.push_back(kHex[hash[i] & 0xF]);
+  }
+  return cached;
 }
 
 } // namespace
@@ -451,6 +504,8 @@ bool ClientCore::encrypt_data(const EncryptParams& params,
   header.set("op", "encrypt");
   header.set("username", params.username);
   header.set("password", params.password);
+  header.set("client_id", client_id_value());
+  header.set("client_host", host_label());
   header.set("cipher", CryptoEngine::cipher_to_string(params.cipher));
   header.set("hash", CryptoEngine::hash_to_string(params.hash));
   header.set("key_storage", key_storage);
@@ -597,6 +652,8 @@ bool ClientCore::decrypt_file(const DecryptParams& params, DecryptResult* result
   header.set("op", "decrypt");
   header.set("username", params.username);
   header.set("password", params.password);
+  header.set("client_id", client_id_value());
+  header.set("client_host", host_label());
   header.set("cipher", CryptoEngine::cipher_to_string(cipher));
   header.set("hash", CryptoEngine::hash_to_string(hash));
   header.set("file_size", std::to_string(ciphertext.size()));
@@ -652,6 +709,8 @@ bool ClientCore::change_password(const std::string& username,
   header.set("op", "change_password");
   header.set("username", username);
   header.set("password", password);
+  header.set("client_id", client_id_value());
+  header.set("client_host", host_label());
   header.set("new_password", new_password);
 
   Header resp;
@@ -663,6 +722,29 @@ bool ClientCore::change_password(const std::string& username,
 
   if (resp.get("status") != "ok") {
     if (err) *err = resp.get("message", "Server error");
+    return false;
+  }
+  return true;
+}
+
+bool ClientCore::authenticate(const std::string& username,
+                              const std::string& password,
+                              std::string* err) {
+  Header header;
+  header.set("op", "auth_check");
+  header.set("username", username);
+  header.set("password", password);
+  header.set("client_id", client_id_value());
+  header.set("client_host", host_label());
+
+  Header resp;
+  std::vector<uint8_t> out;
+  if (!send_request(header, {}, &resp, &out)) {
+    if (err) *err = "Request failed";
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (err) *err = resp.get("message", "Authentication failed");
     return false;
   }
   return true;

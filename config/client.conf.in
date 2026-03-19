@@ -1,9 +1,10 @@
-# cipheator client configuration
-server_host=0.0.0.0
+# cipheator client configuration (installer defaults)
+server_host=127.0.0.1
 server_port=7443
 
 # TLS
-ca_file=/Users/ghostmelon/Desktop/Cipheator/server.crt
+# Relative paths are resolved relative to this config file.
+ca_file=server.crt
 client_cert=
 client_key=
 verify_peer=true

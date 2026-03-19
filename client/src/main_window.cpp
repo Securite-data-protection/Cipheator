@@ -115,34 +115,28 @@ bool write_temp_file(const cipheator::SecureBuffer& data,
   return true;
 }
 
-cipheator::Cipher cipher_from_index(int index) {
-  switch (index) {
-    case 0:
-      return cipheator::Cipher::AES_256_GCM;
-    case 1:
-      return cipheator::Cipher::AES_256_CBC;
-    case 2:
-      return cipheator::Cipher::DES_CBC;
-    case 3:
-      return cipheator::Cipher::DES_ECB;
-    case 4:
-      return cipheator::Cipher::KUZNECHIK;
-    case 5:
-      return cipheator::Cipher::MAGMA;
-    default:
-      return cipheator::Cipher::AES_256_GCM;
+cipheator::Cipher cipher_from_combo(const QComboBox* combo) {
+  if (!combo) return cipheator::Cipher::AES_256_GCM;
+  cipheator::Cipher cipher = cipheator::Cipher::AES_256_GCM;
+  std::string value = combo->currentData().toString().toStdString();
+  if (cipheator::CryptoEngine::cipher_from_string(value, &cipher)) {
+    return cipher;
   }
+  return cipheator::Cipher::AES_256_GCM;
 }
 
-cipheator::HashAlg hash_from_index(int index) {
-  switch (index) {
-    case 0:
-      return cipheator::HashAlg::SHA256;
-    case 1:
-      return cipheator::HashAlg::STREEBOG;
-    default:
-      return cipheator::HashAlg::SHA256;
+cipheator::HashAlg hash_from_combo(const QComboBox* combo) {
+  if (!combo) return cipheator::HashAlg::SHA256;
+  cipheator::HashAlg hash = cipheator::HashAlg::SHA256;
+  std::string value = combo->currentData().toString().toStdString();
+  if (cipheator::CryptoEngine::hash_from_string(value, &hash)) {
+    return hash;
   }
+  return cipheator::HashAlg::SHA256;
+}
+
+bool is_gost_cipher_value(const QString& value) {
+  return value == "kuznechik" || value == "magma";
 }
 
 } // namespace
@@ -156,9 +150,22 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
       username_(username),
       password_(password),
       default_key_storage_(config.default_key_storage) {
-  setWindowTitle("Шифратор");
+  setWindowTitle("ПАК АС");
   auto* central = new QWidget(this);
   auto* layout = new QVBoxLayout(central);
+  layout->setContentsMargins(18, 18, 18, 18);
+  layout->setSpacing(14);
+
+  auto* header = new QWidget(central);
+  auto* header_layout = new QVBoxLayout(header);
+  header_layout->setContentsMargins(0, 0, 0, 0);
+  auto* title = new QLabel("Управление конфигурациями шифрования", header);
+  title->setObjectName("headerTitle");
+  auto* subtitle = new QLabel("Зашифрованные файлы на жестком диске, а расшифрованные в оперативной памяти", header);
+  subtitle->setObjectName("headerSub");
+  header_layout->addWidget(title);
+  header_layout->addWidget(subtitle);
+  layout->addWidget(header);
 
   demo_mode_ = config.demo_mode;
   if (demo_mode_) {
@@ -172,24 +179,86 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
   file_list_ = new QListWidget(files_box);
   file_list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   auto* select_btn = new QPushButton("Выбрать файлы", files_box);
+  select_btn->setObjectName("secondary");
   connect(select_btn, &QPushButton::clicked, this, &MainWindow::onSelectFiles);
   files_layout->addWidget(file_list_);
   files_layout->addWidget(select_btn);
 
   auto* encrypt_box = new QGroupBox("Шифрование", central);
   auto* encrypt_layout = new QHBoxLayout(encrypt_box);
+  encrypt_layout->setSpacing(12);
 
   cipher_combo_ = new QComboBox(encrypt_box);
-  cipher_combo_->addItem("AES-256-GCM");
-  cipher_combo_->addItem("AES-256-CBC");
-  cipher_combo_->addItem("DES-CBC");
-  cipher_combo_->addItem("DES-ECB");
-  cipher_combo_->addItem("Кузнечик");
-  cipher_combo_->addItem("Магма");
+  cipher_combo_->addItem("Кузнечик", "kuznechik");
+  cipher_combo_->addItem("Магма", "magma");
+  cipher_combo_->addItem("CHACHA20", "chacha20");
+  cipher_combo_->addItem("CHACHA20-POLY1305", "chacha20-poly1305");
+  cipher_combo_->addItem("AES-128-ECB", "aes-128-ecb");
+  cipher_combo_->addItem("AES-128-CBC", "aes-128-cbc");
+  cipher_combo_->addItem("AES-128-CFB", "aes-128-cfb");
+  cipher_combo_->addItem("AES-128-OFB", "aes-128-ofb");
+  cipher_combo_->addItem("AES-128-CTR", "aes-128-ctr");
+  cipher_combo_->addItem("AES-128-GCM", "aes-128-gcm");
+  cipher_combo_->addItem("AES-128-CCM", "aes-128-ccm");
+  cipher_combo_->addItem("AES-128-XTS", "aes-128-xts");
+  cipher_combo_->addItem("AES-128-OCB", "aes-128-ocb");
+  cipher_combo_->addItem("AES-192-ECB", "aes-192-ecb");
+  cipher_combo_->addItem("AES-192-CBC", "aes-192-cbc");
+  cipher_combo_->addItem("AES-192-CFB", "aes-192-cfb");
+  cipher_combo_->addItem("AES-192-OFB", "aes-192-ofb");
+  cipher_combo_->addItem("AES-192-CTR", "aes-192-ctr");
+  cipher_combo_->addItem("AES-192-GCM", "aes-192-gcm");
+  cipher_combo_->addItem("AES-192-CCM", "aes-192-ccm");
+  cipher_combo_->addItem("AES-192-OCB", "aes-192-ocb");
+  cipher_combo_->addItem("AES-256-ECB", "aes-256-ecb");
+  cipher_combo_->addItem("AES-256-CBC", "aes-256-cbc");
+  cipher_combo_->addItem("AES-256-CFB", "aes-256-cfb");
+  cipher_combo_->addItem("AES-256-OFB", "aes-256-ofb");
+  cipher_combo_->addItem("AES-256-CTR", "aes-256-ctr");
+  cipher_combo_->addItem("AES-256-GCM", "aes-256-gcm");
+  cipher_combo_->addItem("AES-256-CCM", "aes-256-ccm");
+  cipher_combo_->addItem("AES-256-XTS", "aes-256-xts");
+  cipher_combo_->addItem("AES-256-OCB", "aes-256-ocb");
+  cipher_combo_->addItem("TWOFISH-128-ECB", "twofish-128-ecb");
+  cipher_combo_->addItem("TWOFISH-128-CBC", "twofish-128-cbc");
+  cipher_combo_->addItem("TWOFISH-128-CFB", "twofish-128-cfb");
+  cipher_combo_->addItem("TWOFISH-128-OFB", "twofish-128-ofb");
+  cipher_combo_->addItem("TWOFISH-128-CTR", "twofish-128-ctr");
+  cipher_combo_->addItem("TWOFISH-192-ECB", "twofish-192-ecb");
+  cipher_combo_->addItem("TWOFISH-192-CBC", "twofish-192-cbc");
+  cipher_combo_->addItem("TWOFISH-192-CFB", "twofish-192-cfb");
+  cipher_combo_->addItem("TWOFISH-192-OFB", "twofish-192-ofb");
+  cipher_combo_->addItem("TWOFISH-192-CTR", "twofish-192-ctr");
+  cipher_combo_->addItem("TWOFISH-256-ECB", "twofish-256-ecb");
+  cipher_combo_->addItem("TWOFISH-256-CBC", "twofish-256-cbc");
+  cipher_combo_->addItem("TWOFISH-256-CFB", "twofish-256-cfb");
+  cipher_combo_->addItem("TWOFISH-256-OFB", "twofish-256-ofb");
+  cipher_combo_->addItem("TWOFISH-256-CTR", "twofish-256-ctr");
+  cipher_combo_->addItem("DES-ECB", "des-ecb");
+  cipher_combo_->addItem("DES-CBC", "des-cbc");
+  cipher_combo_->addItem("DES-CFB", "des-cfb");
+  cipher_combo_->addItem("DES-OFB", "des-ofb");
+  cipher_combo_->addItem("DES-CTR", "des-ctr");
+  cipher_combo_->addItem("RC4", "rc4");
+  cipher_combo_->addItem("RC4-40", "rc4-40");
+  cipher_combo_->addItem("RC4-128", "rc4-128");
+
+  auto* gost_mode_label = new QLabel("Режим ГОСТ:", encrypt_box);
+  gost_mode_combo_ = new QComboBox(encrypt_box);
+  gost_mode_combo_->addItem("CTR");
+  gost_mode_combo_->addItem("CFB");
+  gost_mode_combo_->addItem("OFB");
+  gost_mode_combo_->addItem("CBC");
+  gost_mode_combo_->addItem("ECB");
+  gost_mode_combo_->setToolTip("Режим задается для интерфейса. Фактическая реализация определяется бинарником ГОСТ.");
 
   hash_combo_ = new QComboBox(encrypt_box);
-  hash_combo_->addItem("SHA-256");
-  hash_combo_->addItem("Стрибог");
+  hash_combo_->addItem("SHA-256", "sha256");
+  hash_combo_->addItem("SHA-512", "sha512");
+  hash_combo_->addItem("SHA3-256", "sha3-256");
+  hash_combo_->addItem("SHA3-512", "sha3-512");
+  hash_combo_->addItem("BLAKE2b-512", "blake2b-512");
+  hash_combo_->addItem("Стрибог-256 (ГОСТ 34.11-2012)", "streebog");
 
   key_storage_combo_ = new QComboBox(encrypt_box);
   key_storage_combo_->addItem("Сервер (по умолчанию)");
@@ -200,22 +269,41 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
 
   encrypt_layout->addWidget(new QLabel("Алгоритм:", encrypt_box));
   encrypt_layout->addWidget(cipher_combo_);
+  encrypt_layout->addWidget(gost_mode_label);
+  encrypt_layout->addWidget(gost_mode_combo_);
   encrypt_layout->addWidget(new QLabel("Хэш:", encrypt_box));
   encrypt_layout->addWidget(hash_combo_);
   encrypt_layout->addWidget(new QLabel("Хранение ключа:", encrypt_box));
   encrypt_layout->addWidget(key_storage_combo_);
 
+  auto update_gost_mode_visibility = [this, gost_mode_label]() {
+    const QString value = cipher_combo_->currentData().toString();
+    const bool gost = is_gost_cipher_value(value);
+    gost_mode_label->setVisible(gost);
+    gost_mode_combo_->setVisible(gost);
+    gost_mode_combo_->setEnabled(gost);
+  };
+  connect(cipher_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, [update_gost_mode_visibility](int) { update_gost_mode_visibility(); });
+  update_gost_mode_visibility();
+
   auto* decrypt_box = new QGroupBox("Расшифрование", central);
   auto* decrypt_layout = new QHBoxLayout(decrypt_box);
+  decrypt_layout->setSpacing(12);
   temp_checkbox_ = new QCheckBox("Расшифровывать во временный файл (авто-очистка)", decrypt_box);
   temp_checkbox_->setChecked(config.decrypt_to_temp);
+  connect(temp_checkbox_, &QCheckBox::toggled, this, [this](bool) {
+    updateDecryptedActions();
+  });
   decrypt_layout->addWidget(temp_checkbox_);
 
   auto* actions_layout = new QHBoxLayout();
+  actions_layout->setSpacing(12);
   encrypt_btn_ = new QPushButton("Зашифровать", central);
   decrypt_btn_ = new QPushButton("Расшифровать", central);
-  terminate_btn_ = new QPushButton("Завершить", central);
+  terminate_btn_ = new QPushButton("Очистить", central);
   terminate_btn_->setEnabled(false);
+  terminate_btn_->setObjectName("danger");
 
   connect(encrypt_btn_, &QPushButton::clicked, this, &MainWindow::onEncrypt);
   connect(decrypt_btn_, &QPushButton::clicked, this, &MainWindow::onDecrypt);
@@ -225,15 +313,18 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
   actions_layout->addWidget(decrypt_btn_);
   actions_layout->addWidget(terminate_btn_);
 
-  auto* decrypted_box = new QGroupBox("Расшифрованные (в памяти)", central);
+  auto* decrypted_box = new QGroupBox("Расшифрованные файлы в ОП", central);
   auto* decrypted_layout = new QVBoxLayout(decrypted_box);
   decrypted_list_ = new QListWidget(decrypted_box);
   decrypted_layout->addWidget(decrypted_list_);
   auto* decrypted_actions = new QHBoxLayout();
+  decrypted_actions->setSpacing(12);
   preview_btn_ = new QPushButton("Просмотр", decrypted_box);
   preview_btn_->setEnabled(false);
+  preview_btn_->setObjectName("secondary");
   copy_temp_btn_ = new QPushButton("Копировать путь", decrypted_box);
   copy_temp_btn_->setEnabled(false);
+  copy_temp_btn_->setObjectName("secondary");
   connect(preview_btn_, &QPushButton::clicked, this, &MainWindow::onPreviewDecrypted);
   connect(copy_temp_btn_, &QPushButton::clicked, this, &MainWindow::onCopyTempPath);
   connect(decrypted_list_, &QListWidget::currentRowChanged, this, [this](int) {
@@ -304,8 +395,8 @@ void MainWindow::onEncrypt() {
     return;
   }
 
-  cipheator::Cipher cipher = cipher_from_index(cipher_combo_->currentIndex());
-  cipheator::HashAlg hash = hash_from_index(hash_combo_->currentIndex());
+  cipheator::Cipher cipher = cipher_from_combo(cipher_combo_);
+  cipheator::HashAlg hash = hash_from_combo(hash_combo_);
   std::string key_storage = (key_storage_combo_->currentIndex() == 0) ? "server" : "client";
 
   QStringList targets = selectedFilePaths();
@@ -379,7 +470,7 @@ void MainWindow::onDecrypt() {
 
 void MainWindow::onTerminate() {
   if (!reencryptAll()) {
-    QMessageBox::warning(this, "Завершение", "Не удалось пере-зашифровать файлы");
+    QMessageBox::warning(this, "Очистка", "Не удалось очистить и пере-зашифровать файлы");
   }
 }
 
@@ -410,11 +501,24 @@ void MainWindow::onPreviewDecrypted() {
   dialog.setWindowTitle("Просмотр: " + item.filePath);
   auto* layout = new QVBoxLayout(&dialog);
   auto* view = new QPlainTextEdit(&dialog);
+  view->setStyleSheet(
+      "QPlainTextEdit {"
+      " background: #ffffff;"
+      " color: #1f2937;"
+      " border: 1px solid #d7dee7;"
+      " border-radius: 6px;"
+      " selection-background-color: #0f5f5f;"
+      " selection-color: #ffffff;"
+      "}"
+  );
   view->setReadOnly(true);
   view->setPlainText(content);
   layout->addWidget(view);
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+  if (auto* close_btn = buttons->button(QDialogButtonBox::Close)) {
+    close_btn->setText("Закрыть");
+  }
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   layout->addWidget(buttons);
@@ -508,19 +612,33 @@ bool MainWindow::promptPasswordChange() {
 bool MainWindow::promptPasswordChangeUnified() {
   QDialog dialog(this);
   dialog.setWindowTitle("Смена пароля");
+  dialog.setMinimumWidth(500);
   auto* layout = new QVBoxLayout(&dialog);
   auto* form = new QFormLayout();
+  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  form->setHorizontalSpacing(14);
+  form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
   auto* new_pass = new QLineEdit(&dialog);
   auto* confirm = new QLineEdit(&dialog);
   new_pass->setEchoMode(QLineEdit::Password);
   confirm->setEchoMode(QLineEdit::Password);
 
-  form->addRow("Новый пароль:", new_pass);
-  form->addRow("Подтверждение:", confirm);
+  auto* new_pass_label = new QLabel("Новый пароль:", &dialog);
+  auto* confirm_label = new QLabel("Подтверждение:", &dialog);
+  new_pass_label->setMinimumWidth(140);
+  confirm_label->setMinimumWidth(140);
+  form->addRow(new_pass_label, new_pass);
+  form->addRow(confirm_label, confirm);
   layout->addLayout(form);
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  if (auto* ok_btn = buttons->button(QDialogButtonBox::Ok)) {
+    ok_btn->setText("ОК");
+  }
+  if (auto* cancel_btn = buttons->button(QDialogButtonBox::Cancel)) {
+    cancel_btn->setText("Отмена");
+  }
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   layout->addWidget(buttons);
@@ -586,7 +704,9 @@ void MainWindow::updateDecryptedActions() {
     preview_btn_->setEnabled(has_row);
   }
   if (copy_temp_btn_) {
-    bool has_temp = has_row && !decrypted_[static_cast<size_t>(row)].temp_path.empty();
+    bool show = temp_checkbox_ && temp_checkbox_->isChecked();
+    copy_temp_btn_->setVisible(show);
+    bool has_temp = show && has_row && !decrypted_[static_cast<size_t>(row)].temp_path.empty();
     copy_temp_btn_->setEnabled(has_temp);
   }
 }

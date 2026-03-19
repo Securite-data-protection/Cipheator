@@ -60,6 +60,7 @@ class MainWindow : public QMainWindow {
   QListWidget* file_list_ = nullptr;
   QListWidget* decrypted_list_ = nullptr;
   QComboBox* cipher_combo_ = nullptr;
+  QComboBox* gost_mode_combo_ = nullptr;
   QComboBox* hash_combo_ = nullptr;
   QComboBox* key_storage_combo_ = nullptr;
   QCheckBox* temp_checkbox_ = nullptr;
