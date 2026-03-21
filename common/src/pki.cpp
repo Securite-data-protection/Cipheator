@@ -47,6 +47,20 @@ struct Scoped {
   }
 };
 
+template <typename T, int (*F)(T*)>
+struct ScopedInt {
+  T* ptr = nullptr;
+  ~ScopedInt() {
+    if (ptr) F(ptr);
+  }
+  T* get() const { return ptr; }
+  T* release() {
+    T* tmp = ptr;
+    ptr = nullptr;
+    return tmp;
+  }
+};
+
 uint64_t next_serial() {
   static std::mt19937_64 rng(std::random_device{}());
   uint64_t value = rng();
@@ -157,29 +171,27 @@ X509* load_cert(const std::string& path, std::string* err) {
 
 bool generate_rsa_key(const std::string& key_path, int bits, std::string* err) {
   Scoped<EVP_PKEY, EVP_PKEY_free> pkey;
-  Scoped<RSA, RSA_free> rsa;
-  Scoped<BIGNUM, BN_free> e;
+  Scoped<EVP_PKEY_CTX, EVP_PKEY_CTX_free> ctx;
 
-  pkey.ptr = EVP_PKEY_new();
-  rsa.ptr = RSA_new();
-  e.ptr = BN_new();
-  if (!pkey.get() || !rsa.get() || !e.get()) {
-    if (err) *err = "Failed to allocate key objects";
+  ctx.ptr = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+  if (!ctx.get()) {
+    if (err) *err = "Failed to allocate key context";
     return false;
   }
-
-  if (BN_set_word(e.get(), RSA_F4) != 1) {
-    if (err) *err = collect_ssl_errors("BN_set_word failed");
+  if (EVP_PKEY_keygen_init(ctx.get()) <= 0) {
+    if (err) *err = collect_ssl_errors("EVP_PKEY_keygen_init failed");
     return false;
   }
-  if (RSA_generate_key_ex(rsa.get(), bits, e.get(), nullptr) != 1) {
-    if (err) *err = collect_ssl_errors("RSA_generate_key_ex failed");
+  if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx.get(), bits) <= 0) {
+    if (err) *err = collect_ssl_errors("EVP_PKEY_CTX_set_rsa_keygen_bits failed");
     return false;
   }
-  if (EVP_PKEY_assign_RSA(pkey.get(), rsa.release()) != 1) {
-    if (err) *err = collect_ssl_errors("EVP_PKEY_assign_RSA failed");
+  EVP_PKEY* raw = nullptr;
+  if (EVP_PKEY_keygen(ctx.get(), &raw) <= 0) {
+    if (err) *err = collect_ssl_errors("EVP_PKEY_keygen failed");
     return false;
   }
+  pkey.ptr = raw;
 
   return write_key_file(key_path, pkey.get(), err);
 }
@@ -333,7 +345,7 @@ bool sign_csr_pem(const std::string& ca_key_path,
                   std::string* err) {
   if (!cert_pem) return false;
 
-  Scoped<BIO, BIO_free> csr_bio;
+  ScopedInt<BIO, BIO_free> csr_bio;
   csr_bio.ptr = BIO_new_mem_buf(csr_pem.data(), static_cast<int>(csr_pem.size()));
   if (!csr_bio.get()) {
     if (err) *err = "Failed to create CSR buffer";
@@ -389,7 +401,7 @@ bool sign_csr_pem(const std::string& ca_key_path,
     return false;
   }
 
-  Scoped<BIO, BIO_free> out_bio;
+  ScopedInt<BIO, BIO_free> out_bio;
   out_bio.ptr = BIO_new(BIO_s_mem());
   if (!out_bio.get()) {
     if (err) *err = "Failed to allocate output buffer";

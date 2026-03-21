@@ -17,5 +17,6 @@ default_key_storage=server
 clipboard_max_bytes=4096
 # Decrypt to temp file (auto-clean on terminate)
 decrypt_to_temp=false
+ram_disk_path=
 # Demo mode (UI banner + defaults)
 demo_mode=false

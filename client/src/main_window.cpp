@@ -27,9 +27,16 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 
 #if !defined(_WIN32)
 #include <sys/stat.h>
+#include <unistd.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 #include "cipheator/bytes.h"
@@ -70,43 +77,142 @@ QString hex_dump(const uint8_t* data, size_t len) {
   return out;
 }
 
-std::string temp_base_dir() {
+struct RamSessionState {
+  std::string dir;
+  bool initialized = false;
+  bool created = false;
+};
+
+RamSessionState& ram_state() {
+  static RamSessionState state;
+  return state;
+}
+
+std::string ram_root_dir() {
   namespace fs = std::filesystem;
   std::error_code ec;
+  auto& state = ram_state();
+  if (!state.dir.empty()) {
+    fs::path p(state.dir);
+    if (fs::exists(p, ec) && fs::is_directory(p, ec)) {
+      return state.dir;
+    }
+    return "";
+  }
 #if !defined(_WIN32)
   fs::path shm("/dev/shm");
   if (fs::exists(shm, ec) && fs::is_directory(shm, ec)) {
     return shm.string();
   }
 #endif
-  fs::path base = fs::temp_directory_path(ec);
-  if (ec) {
-    return fs::current_path().string();
+  return "";
+}
+
+std::string ram_session_dir() {
+  auto& state = ram_state();
+  if (state.initialized) return state.created ? state.dir : std::string();
+  state.initialized = true;
+
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::path base = ram_root_dir();
+  if (base.empty()) {
+    state.created = false;
+    return "";
   }
-  return base.string();
+#if defined(_WIN32)
+  int pid = static_cast<int>(GetCurrentProcessId());
+#else
+  int pid = static_cast<int>(getpid());
+#endif
+  auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+  fs::path out = fs::path(base) / ("cipheator_ram_" + std::to_string(pid) + "_" + std::to_string(now));
+  fs::create_directories(out, ec);
+  state.dir = out.string();
+  state.created = !state.dir.empty() && fs::exists(state.dir, ec);
+  return state.created ? state.dir : std::string();
+}
+
+bool ram_session_created() {
+  return ram_state().created;
 }
 
 std::string make_temp_path(const QString& original_path) {
   namespace fs = std::filesystem;
   static uint64_t counter = 0;
   auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-  fs::path base = temp_base_dir();
+  fs::path base = ram_session_dir();
   fs::path name = fs::path(original_path.toStdString()).filename();
   std::string suffix = std::to_string(now) + "_" + std::to_string(counter++);
   fs::path out = base / ("cipheator_tmp_" + suffix + "_" + name.string());
   return out.string();
 }
 
+bool secure_wipe_file(const std::string& path) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  if (!fs::exists(path, ec)) return true;
+  uintmax_t size = fs::file_size(path, ec);
+  if (ec) {
+    fs::remove(path, ec);
+    return false;
+  }
+
+  std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+  if (file) {
+    std::vector<char> zeros(8192, 0);
+    uintmax_t written = 0;
+    while (written < size) {
+      size_t chunk = static_cast<size_t>(std::min<uintmax_t>(zeros.size(), size - written));
+      file.write(zeros.data(), static_cast<std::streamsize>(chunk));
+      if (!file) break;
+      written += chunk;
+    }
+    file.flush();
+    file.close();
+  }
+
+  fs::remove(path, ec);
+  return true;
+}
+
+void wipe_ram_session_dir() {
+  if (!ram_session_created()) return;
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  fs::path dir(ram_session_dir());
+  if (!fs::exists(dir, ec)) return;
+
+  for (auto& entry : fs::directory_iterator(dir, ec)) {
+    if (entry.is_regular_file(ec)) {
+      secure_wipe_file(entry.path().string());
+    } else if (entry.is_directory(ec)) {
+      fs::remove_all(entry.path(), ec);
+    } else {
+      fs::remove(entry.path(), ec);
+    }
+  }
+  fs::remove_all(dir, ec);
+  auto& state = ram_state();
+  state.dir.clear();
+  state.created = false;
+  state.initialized = false;
+}
+
 bool write_temp_file(const cipheator::SecureBuffer& data,
                      const std::string& path,
                      std::string* err) {
+  if (path.empty()) {
+    if (err) *err = "RAM-диск не настроен";
+    return false;
+  }
   std::vector<uint8_t> tmp(data.data(), data.data() + data.size());
   bool ok = cipheator::write_file(path, tmp);
   if (!tmp.empty()) {
     cipheator::secure_zero(tmp.data(), tmp.size());
   }
   if (!ok) {
-    if (err) *err = "Failed to write temp file";
+    if (err) *err = "Failed to write RAM file";
     return false;
   }
 #if !defined(_WIN32)
@@ -145,7 +251,12 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
       client_(config),
       username_(username),
       password_(password),
-      default_key_storage_(config.default_key_storage) {
+      default_key_storage_(config.default_key_storage),
+      ram_disk_path_(config.ram_disk_path) {
+  if (!ram_disk_path_.empty()) {
+    auto& state = ram_state();
+    state.dir = ram_disk_path_;
+  }
   setWindowTitle("ПАК АС");
   auto* central = new QWidget(this);
   auto* layout = new QVBoxLayout(central);
@@ -213,12 +324,17 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
   auto* decrypt_box = new QGroupBox("Расшифрование", central);
   auto* decrypt_layout = new QHBoxLayout(decrypt_box);
   decrypt_layout->setSpacing(12);
-  temp_checkbox_ = new QCheckBox("Расшифровывать во временный файл (авто-очистка)", decrypt_box);
+  temp_checkbox_ = new QCheckBox("Расшифровывать в RAM-диск (авто-очистка)", decrypt_box);
   temp_checkbox_->setChecked(config.decrypt_to_temp);
   connect(temp_checkbox_, &QCheckBox::toggled, this, [this](bool) {
     updateDecryptedActions();
   });
   decrypt_layout->addWidget(temp_checkbox_);
+  if (ram_root_dir().empty()) {
+    temp_checkbox_->setChecked(false);
+    temp_checkbox_->setEnabled(false);
+    temp_checkbox_->setToolTip("RAM-диск не настроен. Укажите ram_disk_path в config/client.conf.");
+  }
 
   auto* actions_layout = new QHBoxLayout();
   actions_layout->setSpacing(12);
@@ -301,6 +417,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
   }
 
+  wipe_ram_session_dir();
   event->accept();
 }
 
@@ -349,6 +466,8 @@ void MainWindow::onEncrypt() {
     }
     auth_failures_ = 0;
     addStatus("Зашифровано: " + path);
+    QMessageBox::information(this, "Шифрование",
+                             "Файл успешно зашифрован:\n" + path);
   }
 }
 
@@ -392,14 +511,14 @@ void MainWindow::onDecrypt() {
       if (write_temp_file(item.data, temp_path, &temp_err)) {
         item.temp_path = temp_path;
       } else {
-        addStatus("Ошибка временного файла: " + QString::fromStdString(temp_err));
+        addStatus("Ошибка RAM-диска: " + QString::fromStdString(temp_err));
       }
     }
     decrypted_.push_back(std::move(item));
     auto* list_item = new QListWidgetItem(path, decrypted_list_);
     if (!decrypted_.back().temp_path.empty()) {
-      list_item->setToolTip("Временный файл: " + QString::fromStdString(decrypted_.back().temp_path));
-      addStatus("Расшифровано в память (временный файл): " + path);
+      list_item->setToolTip("RAM-диск: " + QString::fromStdString(decrypted_.back().temp_path));
+      addStatus("Расшифровано в RAM-диск: " + path);
     } else {
       addStatus("Расшифровано в память: " + path);
     }
@@ -475,13 +594,13 @@ void MainWindow::onCopyTempPath() {
   }
   const auto& item = decrypted_[static_cast<size_t>(row)];
   if (item.temp_path.empty()) {
-    QMessageBox::information(this, "Временный файл", "Для этого файла нет временного пути.");
+    QMessageBox::information(this, "RAM-диск", "Для этого файла нет пути в RAM-диск.");
     return;
   }
   if (auto* clipboard = QApplication::clipboard()) {
     clipboard->setText(QString::fromStdString(item.temp_path));
   }
-  QMessageBox::information(this, "Временный файл", "Путь скопирован в буфер обмена.");
+  QMessageBox::information(this, "RAM-диск", "Путь скопирован в буфер обмена.");
 }
 
 bool MainWindow::reencryptAll() {
@@ -511,14 +630,14 @@ bool MainWindow::reencryptAll() {
     }
     cipheator::secure_zero(data.data(), data.size());
     if (!item.temp_path.empty()) {
-      std::error_code ec;
-      std::filesystem::remove(item.temp_path, ec);
+      secure_wipe_file(item.temp_path);
     }
     addStatus("Re-encrypted: " + item.filePath);
   }
 
   decrypted_.clear();
   decrypted_list_->clear();
+  wipe_ram_session_dir();
   updateSecureState();
   return true;
 }

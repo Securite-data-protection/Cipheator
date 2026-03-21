@@ -411,6 +411,7 @@ int main(int argc, char** argv) {
   client_cfg.clipboard_max_bytes = static_cast<size_t>(config.get_int("clipboard_max_bytes", 0));
   client_cfg.decrypt_to_temp = config.get_bool("decrypt_to_temp", false);
   client_cfg.demo_mode = config.get_bool("demo_mode", false);
+  client_cfg.ram_disk_path = resolve_relative_path(config.get("ram_disk_path"), config_path, exe_path);
   std::string enroll_token = config.get("enroll_token");
   int enroll_port = config.get_int("enroll_port", 7445);
   uint64_t last_policy_version = 0;
@@ -524,6 +525,7 @@ int main(int argc, char** argv) {
       {"ca_file", client_cfg.ca_file},
       {"client_cert", client_cfg.client_cert},
       {"client_key", client_cfg.client_key},
+      {"ram_disk_path", client_cfg.ram_disk_path},
       {"enroll_port", std::to_string(enroll_port)},
       {"last_policy_version", std::to_string(last_policy_version)}
   };

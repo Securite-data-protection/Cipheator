@@ -57,6 +57,7 @@ class MainWindow : public QMainWindow {
   QString username_;
   QString password_;
   std::string default_key_storage_;
+  std::string ram_disk_path_;
   bool demo_mode_ = false;
   int auth_failures_ = 0;
   bool password_expired_ = false;
