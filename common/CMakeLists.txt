@@ -11,6 +11,7 @@ set(COMMON_HEADERS
   include/cipheator/auth.h
   include/cipheator/net.h
   include/cipheator/tls.h
+  include/cipheator/pki.h
 )
 
 set(COMMON_SOURCES
@@ -24,6 +25,7 @@ set(COMMON_SOURCES
   src/auth.cpp
   src/net.cpp
   src/tls.cpp
+  src/pki.cpp
 )
 
 target_sources(cipheator_common PRIVATE ${COMMON_HEADERS} ${COMMON_SOURCES})

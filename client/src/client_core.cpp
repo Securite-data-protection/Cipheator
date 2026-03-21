@@ -307,10 +307,13 @@ bool ClientCore::send_request(const Header& header,
   if (out) {
     out->clear();
     size_t size = 0;
+    std::string payload_size = resp.get("payload_size");
     std::string enc_size = resp.get("enc_size");
     std::string plain_size = resp.get("plain_size");
     try {
-      if (!enc_size.empty()) {
+      if (!payload_size.empty()) {
+        size = static_cast<size_t>(std::stoull(payload_size));
+      } else if (!enc_size.empty()) {
         size = static_cast<size_t>(std::stoull(enc_size));
       } else if (!plain_size.empty()) {
         size = static_cast<size_t>(std::stoull(plain_size));
@@ -496,6 +499,7 @@ bool ClientCore::encrypt_data(const EncryptParams& params,
                               bool write_to_disk) {
   if (!result) return false;
   result->ok = false;
+  result->error_code.clear();
 
   std::string key_storage = params.key_storage.empty() ? config_.default_key_storage
                                                        : params.key_storage;
@@ -523,6 +527,7 @@ bool ClientCore::encrypt_data(const EncryptParams& params,
   if (resp.get("status") != "ok") {
     log_client_error("encrypt server error: " + resp.get("message", "Server error"));
     result->message = resp.get("message", "Server error");
+    result->error_code = resp.get("error_code");
     return false;
   }
 
@@ -580,6 +585,7 @@ bool ClientCore::encrypt_data(const EncryptParams& params,
 bool ClientCore::decrypt_file(const DecryptParams& params, DecryptResult* result) {
   if (!result) return false;
   result->ok = false;
+  result->error_code.clear();
 
   std::string key_storage;
   std::string file_id;
@@ -684,6 +690,7 @@ bool ClientCore::decrypt_file(const DecryptParams& params, DecryptResult* result
   if (resp.get("status") != "ok") {
     log_client_error("decrypt server error: " + resp.get("message", "Server error"));
     result->message = resp.get("message", "Server error");
+    result->error_code = resp.get("error_code");
     return false;
   }
 
@@ -729,7 +736,9 @@ bool ClientCore::change_password(const std::string& username,
 
 bool ClientCore::authenticate(const std::string& username,
                               const std::string& password,
-                              std::string* err) {
+                              std::string* err,
+                              std::string* code,
+                              uint64_t* policy_version) {
   Header header;
   header.set("op", "auth_check");
   header.set("username", username);
@@ -745,7 +754,69 @@ bool ClientCore::authenticate(const std::string& username,
   }
   if (resp.get("status") != "ok") {
     if (err) *err = resp.get("message", "Authentication failed");
+    if (code) *code = resp.get("error_code");
     return false;
+  }
+  if (policy_version) {
+    *policy_version = 0;
+    if (!resp.get("policy_version").empty()) {
+      try {
+        *policy_version = static_cast<uint64_t>(std::stoull(resp.get("policy_version")));
+      } catch (...) {
+        *policy_version = 0;
+      }
+    }
+  }
+  return true;
+}
+
+bool ClientCore::enroll_certificate(const std::string& role,
+                                    const std::string& enroll_token,
+                                    const std::string& csr_pem,
+                                    EnrollResult* result) {
+  if (result) *result = EnrollResult{};
+  Header header;
+  header.set("op", "enroll");
+  header.set("role", role);
+  if (!enroll_token.empty()) {
+    header.set("enroll_token", enroll_token);
+  }
+  header.set("payload_size", std::to_string(csr_pem.size()));
+
+  Header resp;
+  std::vector<uint8_t> out;
+  std::vector<uint8_t> payload(csr_pem.begin(), csr_pem.end());
+  if (!send_request(header, payload, &resp, &out)) {
+    if (result) {
+      result->ok = false;
+      result->message = "Request failed";
+    }
+    return false;
+  }
+  if (resp.get("status") != "ok") {
+    if (result) {
+      result->ok = false;
+      result->message = resp.get("message", "Enroll failed");
+    }
+    return false;
+  }
+
+  std::string combined(out.begin(), out.end());
+  const std::string kDelimiter = "\n-----CIPHEATOR-CERT-----\n";
+  auto pos = combined.find(kDelimiter);
+  if (pos == std::string::npos) {
+    if (result) {
+      result->ok = false;
+      result->message = "Invalid enroll payload";
+    }
+    return false;
+  }
+  std::string ca_pem = combined.substr(0, pos);
+  std::string cert_pem = combined.substr(pos + kDelimiter.size());
+  if (result) {
+    result->ok = true;
+    result->ca_pem = std::move(ca_pem);
+    result->cert_pem = std::move(cert_pem);
   }
   return true;
 }

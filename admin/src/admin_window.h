@@ -23,6 +23,11 @@ class AdminWindow : public QMainWindow {
   void onRefreshAlerts();
   void onRefreshLogs();
   void onRefreshStats();
+  void onRefreshPolicy();
+  void onSetPasswordPolicy();
+  void onSetAnomalyPolicy();
+  void onToggleProactiveHidden();
+  void onDeleteAdminRole();
   void onRefreshBinding();
   void onToggleBinding();
   void onAllowClient();
@@ -50,12 +55,14 @@ class AdminWindow : public QMainWindow {
   std::unordered_map<std::string, std::vector<std::string>> cached_stats_;
   std::unordered_map<std::string, std::vector<std::string>> cached_locks_;
   std::unordered_map<std::string, bool> cached_binding_enabled_;
+  std::unordered_map<std::string, cipheator::SecurityPolicy> cached_policy_;
 
   QListWidget* device_list_ = nullptr;
   QListWidget* alert_list_ = nullptr;
   QPlainTextEdit* log_view_ = nullptr;
   QPlainTextEdit* stats_view_ = nullptr;
   QPlainTextEdit* binding_view_ = nullptr;
+  QPlainTextEdit* policy_view_ = nullptr;
   QPlainTextEdit* analysis_view_ = nullptr;
   QLabel* status_label_ = nullptr;
   QTimer auto_timer_;

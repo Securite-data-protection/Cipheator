@@ -2,12 +2,18 @@
 
 #include <QAction>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QInputDialog>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -71,6 +77,50 @@ QString bytes_to_mb(uint64_t bytes) {
   return QString::number(mb, 'f', 1) + " MB";
 }
 
+QString format_ts(int64_t ts) {
+  return QDateTime::fromSecsSinceEpoch(ts).toString("yyyy-MM-dd HH:mm:ss");
+}
+
+QString format_log_line(const std::string& line) {
+  auto parts = split_pipe(line);
+  if (parts.size() < 4) {
+    return QString::fromStdString(line);
+  }
+  int64_t ts = 0;
+  try {
+    ts = std::stoll(parts[0]);
+  } catch (...) {
+    return QString::fromStdString(line);
+  }
+  QString out;
+  out += format_ts(ts);
+  out += " | ";
+  out += QString::fromStdString(parts[1]) + " | ";
+  out += QString::fromStdString(parts[2]) + " | ";
+  out += QString::fromStdString(parts[3]);
+  return out;
+}
+
+QString format_alert_line(const std::string& line) {
+  auto parts = split_pipe(line);
+  if (parts.size() < 5) {
+    return QString::fromStdString(line);
+  }
+  int64_t ts = 0;
+  try {
+    ts = std::stoll(parts[1]);
+  } catch (...) {
+    return QString::fromStdString(line);
+  }
+  QString out;
+  out += "#" + QString::fromStdString(parts[0]) + " | ";
+  out += format_ts(ts) + " | ";
+  out += QString::fromStdString(parts[2]) + " | ";
+  out += QString::fromStdString(parts[3]) + " | ";
+  out += QString::fromStdString(parts[4]);
+  return out;
+}
+
 } // namespace
 
 AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
@@ -89,6 +139,8 @@ AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
 
   binding_view_ = new QPlainTextEdit(right_pane);
   binding_view_->setReadOnly(true);
+  policy_view_ = new QPlainTextEdit(right_pane);
+  policy_view_->setReadOnly(true);
   log_view_ = new QPlainTextEdit(right_pane);
   log_view_->setReadOnly(true);
   stats_view_ = new QPlainTextEdit(right_pane);
@@ -96,6 +148,8 @@ AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
   analysis_view_ = new QPlainTextEdit(right_pane);
   analysis_view_->setReadOnly(true);
 
+  right_layout->addWidget(new QLabel("Политики безопасности", right_pane));
+  right_layout->addWidget(policy_view_);
   right_layout->addWidget(new QLabel("Жесткая привязка ПК", right_pane));
   right_layout->addWidget(binding_view_);
   right_layout->addWidget(new QLabel("Журналы", right_pane));
@@ -122,6 +176,10 @@ AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
   QAction* alerts_action = toolbar->addAction("Обновить тревоги");
   QAction* logs_action = toolbar->addAction("Обновить журнал");
   QAction* stats_action = toolbar->addAction("Обновить статистику");
+  QAction* policy_action = toolbar->addAction("Обновить политики");
+  QAction* set_password_policy_action = toolbar->addAction("Срок пароля");
+  QAction* set_anomaly_policy_action = toolbar->addAction("Пороговые значения");
+  QAction* delete_admin_action = toolbar->addAction("Удалить роль админа (безвозвратно)");
   QAction* binding_action = toolbar->addAction("Обновить привязку");
   QAction* toggle_binding_action = toolbar->addAction("Вкл/Выкл привязку");
   QAction* allow_client_action = toolbar->addAction("Разрешить ПК");
@@ -133,11 +191,21 @@ AdminWindow::AdminWindow(const cipheator::AdminConfig& config, QWidget* parent)
   connect(alerts_action, &QAction::triggered, this, &AdminWindow::onRefreshAlerts);
   connect(logs_action, &QAction::triggered, this, &AdminWindow::onRefreshLogs);
   connect(stats_action, &QAction::triggered, this, &AdminWindow::onRefreshStats);
+  connect(policy_action, &QAction::triggered, this, &AdminWindow::onRefreshPolicy);
+  connect(set_password_policy_action, &QAction::triggered, this, &AdminWindow::onSetPasswordPolicy);
+  connect(set_anomaly_policy_action, &QAction::triggered, this, &AdminWindow::onSetAnomalyPolicy);
+  connect(delete_admin_action, &QAction::triggered, this, &AdminWindow::onDeleteAdminRole);
   connect(binding_action, &QAction::triggered, this, &AdminWindow::onRefreshBinding);
   connect(toggle_binding_action, &QAction::triggered, this, &AdminWindow::onToggleBinding);
   connect(allow_client_action, &QAction::triggered, this, &AdminWindow::onAllowClient);
   connect(block_client_action, &QAction::triggered, this, &AdminWindow::onBlockClient);
   connect(unlock_user_action, &QAction::triggered, this, &AdminWindow::onUnlockUser);
+
+  auto* hidden_proactive = new QAction(this);
+  hidden_proactive->setShortcut(QKeySequence("Ctrl+Shift+Alt+P"));
+  hidden_proactive->setShortcutContext(Qt::ApplicationShortcut);
+  addAction(hidden_proactive);
+  connect(hidden_proactive, &QAction::triggered, this, &AdminWindow::onToggleProactiveHidden);
 
   auto_timer_.setInterval(30000);
   connect(&auto_timer_, &QTimer::timeout, this, &AdminWindow::onAutoRefresh);
@@ -253,7 +321,7 @@ void AdminWindow::onRefreshAlerts() {
   }
 
   for (const auto& line : lines) {
-    alert_list_->addItem(QString::fromStdString(line));
+    alert_list_->addItem(format_alert_line(line));
   }
 
   addStatus("Тревоги обновлены");
@@ -275,7 +343,7 @@ void AdminWindow::onRefreshLogs() {
 
   QString text;
   for (const auto& line : lines) {
-    text += QString::fromStdString(line);
+    text += format_log_line(line);
     text += "\n";
   }
   log_view_->setPlainText(text);
@@ -317,6 +385,280 @@ void AdminWindow::onRefreshStats() {
   cached_locks_[key] = locks;
   renderPatternAnalysis(cached_logs_[key], cached_stats_[key], cached_locks_[key], *device);
   addStatus("Статистика обновлена");
+}
+
+void AdminWindow::onRefreshPolicy() {
+  auto* device = selectedDevice();
+  if (!device) {
+    addStatus("Выберите устройство");
+    return;
+  }
+
+  cipheator::SecurityPolicy policy;
+  std::string err;
+  if (!client_.get_policy(*device, &policy, &err)) {
+    addStatus(QString::fromStdString("Ошибка политик: " + err));
+    return;
+  }
+
+  const std::string key = deviceKey(*device);
+  cached_policy_[key] = policy;
+
+  QString text;
+  text += QString("Админ-роль: %1\n").arg(policy.admin_enabled ? "активна" : "удалена");
+  if (policy.last_config_change_ts > 0) {
+    text += QString("Последнее изменение: %1\n").arg(format_ts(policy.last_config_change_ts));
+  }
+  text += QString("Срок смены пароля: %1 дней\n").arg(policy.password_max_age_days);
+  text += QString("Проактивная защита: %1\n").arg(policy.proactive_enabled ? "ВКЛ" : "ВЫКЛ");
+  text += QString("Рабочие часы: %1-%2\n").arg(policy.work_hours_start).arg(policy.work_hours_end);
+  text += QString("Порог ошибок входа: %1 за %2 сек\n")
+              .arg(static_cast<qulonglong>(policy.failed_login_threshold))
+              .arg(static_cast<qlonglong>(policy.failed_login_window_sec));
+  text += QString("Порог файловых операций: %1 за %2 сек\n")
+              .arg(static_cast<qulonglong>(policy.bulk_files_threshold))
+              .arg(static_cast<qlonglong>(policy.bulk_files_window_sec));
+  text += QString("Порог расшифрований: %1 за %2 сек\n")
+              .arg(static_cast<qulonglong>(policy.decrypt_burst_threshold))
+              .arg(static_cast<qlonglong>(policy.decrypt_burst_window_sec));
+  text += QString("Порог объема расшифровки: %1 МБ за %2 сек\n")
+              .arg(static_cast<qulonglong>(policy.decrypt_volume_threshold_mb))
+              .arg(static_cast<qlonglong>(policy.decrypt_volume_window_sec));
+  policy_view_->setPlainText(text);
+  addStatus("Политики обновлены");
+}
+
+void AdminWindow::onSetPasswordPolicy() {
+  auto* device = selectedDevice();
+  if (!device) {
+    addStatus("Выберите устройство");
+    return;
+  }
+
+  const std::string key = deviceKey(*device);
+  cipheator::SecurityPolicy policy;
+  auto it = cached_policy_.find(key);
+  if (it != cached_policy_.end()) {
+    policy = it->second;
+  }
+
+  bool ok = false;
+  int days = QInputDialog::getInt(this,
+                                  "Срок смены пароля",
+                                  "Дней до обязательной смены:",
+                                  policy.password_max_age_days,
+                                  1,
+                                  3650,
+                                  1,
+                                  &ok);
+  if (!ok) return;
+
+  policy.password_max_age_days = days;
+  std::string err;
+  if (!client_.set_policy(*device, policy, &err)) {
+    addStatus(QString::fromStdString("Ошибка политики: " + err));
+    return;
+  }
+
+  onRefreshPolicy();
+  addStatus("Срок смены пароля обновлён");
+}
+
+void AdminWindow::onSetAnomalyPolicy() {
+  auto* device = selectedDevice();
+  if (!device) {
+    addStatus("Выберите устройство");
+    return;
+  }
+
+  const std::string key = deviceKey(*device);
+  cipheator::SecurityPolicy policy;
+  auto it = cached_policy_.find(key);
+  if (it != cached_policy_.end()) {
+    policy = it->second;
+  } else {
+    std::string err;
+    if (!client_.get_policy(*device, &policy, &err)) {
+      addStatus(QString::fromStdString("Ошибка политик: " + err));
+      return;
+    }
+  }
+
+  QDialog dialog(this);
+  dialog.setWindowTitle("Пороговые значения");
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* form = new QFormLayout();
+  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  form->setHorizontalSpacing(14);
+  form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+  auto* work_start = new QSpinBox(&dialog);
+  work_start->setRange(-1, 23);
+  work_start->setValue(policy.work_hours_start);
+  auto* work_end = new QSpinBox(&dialog);
+  work_end->setRange(-1, 23);
+  work_end->setValue(policy.work_hours_end);
+
+  auto* failed_thr = new QSpinBox(&dialog);
+  failed_thr->setRange(1, 100);
+  failed_thr->setValue(static_cast<int>(policy.failed_login_threshold));
+  auto* failed_win = new QSpinBox(&dialog);
+  failed_win->setRange(10, 7200);
+  failed_win->setValue(static_cast<int>(policy.failed_login_window_sec));
+
+  auto* bulk_thr = new QSpinBox(&dialog);
+  bulk_thr->setRange(1, 1000);
+  bulk_thr->setValue(static_cast<int>(policy.bulk_files_threshold));
+  auto* bulk_win = new QSpinBox(&dialog);
+  bulk_win->setRange(10, 7200);
+  bulk_win->setValue(static_cast<int>(policy.bulk_files_window_sec));
+
+  auto* dec_thr = new QSpinBox(&dialog);
+  dec_thr->setRange(1, 1000);
+  dec_thr->setValue(static_cast<int>(policy.decrypt_burst_threshold));
+  auto* dec_win = new QSpinBox(&dialog);
+  dec_win->setRange(10, 7200);
+  dec_win->setValue(static_cast<int>(policy.decrypt_burst_window_sec));
+
+  auto* dec_mb = new QSpinBox(&dialog);
+  dec_mb->setRange(1, 10240);
+  dec_mb->setValue(static_cast<int>(policy.decrypt_volume_threshold_mb));
+  auto* dec_mb_win = new QSpinBox(&dialog);
+  dec_mb_win->setRange(10, 7200);
+  dec_mb_win->setValue(static_cast<int>(policy.decrypt_volume_window_sec));
+
+  form->addRow(new QLabel("Рабочий час (начало):", &dialog), work_start);
+  form->addRow(new QLabel("Рабочий час (конец):", &dialog), work_end);
+  form->addRow(new QLabel("Ошибки входа (шт):", &dialog), failed_thr);
+  form->addRow(new QLabel("Ошибки входа (сек):", &dialog), failed_win);
+  form->addRow(new QLabel("Операции с файлами (шт):", &dialog), bulk_thr);
+  form->addRow(new QLabel("Операции с файлами (сек):", &dialog), bulk_win);
+  form->addRow(new QLabel("Расшифрования (шт):", &dialog), dec_thr);
+  form->addRow(new QLabel("Расшифрования (сек):", &dialog), dec_win);
+  form->addRow(new QLabel("Объем расшифровки (МБ):", &dialog), dec_mb);
+  form->addRow(new QLabel("Объем расшифровки (сек):", &dialog), dec_mb_win);
+
+  layout->addLayout(form);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  if (auto* ok_btn = buttons->button(QDialogButtonBox::Ok)) {
+    ok_btn->setText("ОК");
+  }
+  if (auto* cancel_btn = buttons->button(QDialogButtonBox::Cancel)) {
+    cancel_btn->setText("Отмена");
+  }
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+
+  if (dialog.exec() != QDialog::Accepted) return;
+
+  policy.work_hours_start = work_start->value();
+  policy.work_hours_end = work_end->value();
+  policy.failed_login_threshold = static_cast<size_t>(failed_thr->value());
+  policy.failed_login_window_sec = failed_win->value();
+  policy.bulk_files_threshold = static_cast<size_t>(bulk_thr->value());
+  policy.bulk_files_window_sec = bulk_win->value();
+  policy.decrypt_burst_threshold = static_cast<size_t>(dec_thr->value());
+  policy.decrypt_burst_window_sec = dec_win->value();
+  policy.decrypt_volume_threshold_mb = static_cast<size_t>(dec_mb->value());
+  policy.decrypt_volume_window_sec = dec_mb_win->value();
+
+  std::string err;
+  if (!client_.set_policy(*device, policy, &err)) {
+    addStatus(QString::fromStdString("Ошибка политики: " + err));
+    return;
+  }
+  onRefreshPolicy();
+  addStatus("Пороговые значения обновлены");
+}
+
+void AdminWindow::onToggleProactiveHidden() {
+  auto* device = selectedDevice();
+  if (!device) {
+    addStatus("Выберите устройство");
+    return;
+  }
+
+  const std::string key = deviceKey(*device);
+  cipheator::SecurityPolicy policy;
+  auto it = cached_policy_.find(key);
+  if (it != cached_policy_.end()) {
+    policy = it->second;
+  } else {
+    std::string err;
+    if (!client_.get_policy(*device, &policy, &err)) {
+      addStatus(QString::fromStdString("Ошибка политики: " + err));
+      return;
+    }
+  }
+
+  policy.proactive_enabled = !policy.proactive_enabled;
+  std::string err;
+  if (!client_.set_policy(*device, policy, &err)) {
+    addStatus(QString::fromStdString("Ошибка политики: " + err));
+    return;
+  }
+  onRefreshPolicy();
+  auto it_after = cached_policy_.find(key);
+  if (it_after != cached_policy_.end()) {
+    addStatus(it_after->second.proactive_enabled ? "Проактивная защита включена"
+                                                 : "Проактивная защита выключена");
+  }
+}
+
+void AdminWindow::onDeleteAdminRole() {
+  auto* device = selectedDevice();
+  if (!device) {
+    addStatus("Выберите устройство");
+    return;
+  }
+
+  const std::string key = deviceKey(*device);
+  cipheator::SecurityPolicy policy;
+  auto it = cached_policy_.find(key);
+  if (it != cached_policy_.end()) {
+    policy = it->second;
+  } else {
+    std::string err;
+    if (!client_.get_policy(*device, &policy, &err)) {
+      addStatus(QString::fromStdString("Ошибка политик: " + err));
+      return;
+    }
+  }
+
+  if (!policy.admin_enabled) {
+    addStatus("Роль администратора уже удалена");
+    return;
+  }
+
+  int64_t now = QDateTime::currentSecsSinceEpoch();
+  int64_t reference = policy.last_config_change_ts > 0 ? policy.last_config_change_ts : policy.admin_created_ts;
+  if (reference == 0) reference = now;
+  int64_t remaining = (3 * 24 * 60 * 60) - (now - reference);
+  if (remaining > 0) {
+    addStatus(QString("Удаление доступно через %1 часов")
+                  .arg(static_cast<qlonglong>((remaining + 3599) / 3600)));
+    return;
+  }
+
+  bool ok = false;
+  QString code = QInputDialog::getText(this,
+                                       "Удалить учетку и роль администратора",
+                                       "Введите DELETE для подтверждения безвозвратного удаления:",
+                                       QLineEdit::Normal,
+                                       "",
+                                       &ok);
+  if (!ok || code != "DELETE") {
+    return;
+  }
+
+  std::string err;
+  if (!client_.delete_admin_role(*device, &err)) {
+    addStatus(QString::fromStdString("Ошибка удаления роли: " + err));
+    return;
+  }
+  onRefreshPolicy();
+  addStatus("Учетка и роль администратора удалены безвозвратно");
 }
 
 void AdminWindow::onRefreshBinding() {
@@ -471,13 +813,18 @@ void AdminWindow::onUnlockUser() {
                                        &ok);
   if (!ok || user.isEmpty()) return;
 
-  if (!client_.unlock_user(*device, user.toStdString(), &err)) {
+  std::string message;
+  if (!client_.unlock_user(*device, user.toStdString(), &message, &err)) {
     addStatus(QString::fromStdString("Ошибка снятия блокировки: " + err));
     return;
   }
 
   onRefreshStats();
-  addStatus("Блокировка снята");
+  if (message.empty()) {
+    addStatus("Блокировка обновлена");
+  } else {
+    addStatus(QString::fromStdString(message));
+  }
 }
 
 void AdminWindow::renderPatternAnalysis(const std::vector<std::string>& logs,
@@ -580,7 +927,9 @@ void AdminWindow::renderPatternAnalysis(const std::vector<std::string>& logs,
 }
 
 void AdminWindow::onAutoRefresh() {
+  if (!selectedDevice()) return;
   onRefreshAlerts();
+  onRefreshPolicy();
   onRefreshBinding();
   onRefreshLogs();
   onRefreshStats();

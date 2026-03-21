@@ -4,10 +4,12 @@ server_port=7443
 
 # TLS
 # Relative paths are resolved relative to this config file.
-ca_file=server.crt
+ca_file=
 client_cert=
 client_key=
 verify_peer=true
+enroll_port=7445
+enroll_token=
 
 # behavior
 default_key_storage=server

@@ -4,6 +4,7 @@
 #include "cipheator/secure_memory.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,7 @@ struct EncryptParams {
 struct EncryptResult {
   bool ok = false;
   std::string message;
+  std::string error_code;
   std::string file_id;
   std::string key_id;
   std::string hash_value;
@@ -53,12 +55,20 @@ struct DecryptParams {
 struct DecryptResult {
   bool ok = false;
   std::string message;
+  std::string error_code;
   SecureBuffer data;
   std::string original_name;
   Cipher cipher = Cipher::AES_256_GCM;
   HashAlg hash = HashAlg::SHA256;
   std::string key_storage;
   std::string file_id;
+};
+
+struct EnrollResult {
+  bool ok = false;
+  std::string message;
+  std::string ca_pem;
+  std::string cert_pem;
 };
 
 class ClientCore {
@@ -73,7 +83,13 @@ class ClientCore {
   bool decrypt_file(const DecryptParams& params, DecryptResult* result);
   bool authenticate(const std::string& username,
                     const std::string& password,
-                    std::string* err);
+                    std::string* err,
+                    std::string* code = nullptr,
+                    uint64_t* policy_version = nullptr);
+  bool enroll_certificate(const std::string& role,
+                          const std::string& enroll_token,
+                          const std::string& csr_pem,
+                          EnrollResult* result);
   bool change_password(const std::string& username,
                        const std::string& password,
                        const std::string& new_password,

@@ -50,17 +50,20 @@ class MainWindow : public QMainWindow {
   void addStatus(const QString& text);
   QStringList selectedFilePaths() const;
   void updateDecryptedActions();
+  void registerAuthFailure(const std::string& code);
+  void clearSessionKey();
 
   cipheator::ClientCore client_;
   QString username_;
   QString password_;
   std::string default_key_storage_;
   bool demo_mode_ = false;
+  int auth_failures_ = 0;
+  bool password_expired_ = false;
 
   QListWidget* file_list_ = nullptr;
   QListWidget* decrypted_list_ = nullptr;
   QComboBox* cipher_combo_ = nullptr;
-  QComboBox* gost_mode_combo_ = nullptr;
   QComboBox* hash_combo_ = nullptr;
   QComboBox* key_storage_combo_ = nullptr;
   QCheckBox* temp_checkbox_ = nullptr;

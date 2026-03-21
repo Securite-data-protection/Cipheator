@@ -135,10 +135,6 @@ cipheator::HashAlg hash_from_combo(const QComboBox* combo) {
   return cipheator::HashAlg::SHA256;
 }
 
-bool is_gost_cipher_value(const QString& value) {
-  return value == "kuznechik" || value == "magma";
-}
-
 } // namespace
 
 MainWindow::MainWindow(const cipheator::ClientConfig& config,
@@ -189,68 +185,8 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
   encrypt_layout->setSpacing(12);
 
   cipher_combo_ = new QComboBox(encrypt_box);
-  cipher_combo_->addItem("Кузнечик", "kuznechik");
-  cipher_combo_->addItem("Магма", "magma");
-  cipher_combo_->addItem("CHACHA20", "chacha20");
-  cipher_combo_->addItem("CHACHA20-POLY1305", "chacha20-poly1305");
-  cipher_combo_->addItem("AES-128-ECB", "aes-128-ecb");
-  cipher_combo_->addItem("AES-128-CBC", "aes-128-cbc");
-  cipher_combo_->addItem("AES-128-CFB", "aes-128-cfb");
-  cipher_combo_->addItem("AES-128-OFB", "aes-128-ofb");
-  cipher_combo_->addItem("AES-128-CTR", "aes-128-ctr");
-  cipher_combo_->addItem("AES-128-GCM", "aes-128-gcm");
-  cipher_combo_->addItem("AES-128-CCM", "aes-128-ccm");
-  cipher_combo_->addItem("AES-128-XTS", "aes-128-xts");
-  cipher_combo_->addItem("AES-128-OCB", "aes-128-ocb");
-  cipher_combo_->addItem("AES-192-ECB", "aes-192-ecb");
-  cipher_combo_->addItem("AES-192-CBC", "aes-192-cbc");
-  cipher_combo_->addItem("AES-192-CFB", "aes-192-cfb");
-  cipher_combo_->addItem("AES-192-OFB", "aes-192-ofb");
-  cipher_combo_->addItem("AES-192-CTR", "aes-192-ctr");
-  cipher_combo_->addItem("AES-192-GCM", "aes-192-gcm");
-  cipher_combo_->addItem("AES-192-CCM", "aes-192-ccm");
-  cipher_combo_->addItem("AES-192-OCB", "aes-192-ocb");
-  cipher_combo_->addItem("AES-256-ECB", "aes-256-ecb");
-  cipher_combo_->addItem("AES-256-CBC", "aes-256-cbc");
-  cipher_combo_->addItem("AES-256-CFB", "aes-256-cfb");
-  cipher_combo_->addItem("AES-256-OFB", "aes-256-ofb");
-  cipher_combo_->addItem("AES-256-CTR", "aes-256-ctr");
-  cipher_combo_->addItem("AES-256-GCM", "aes-256-gcm");
-  cipher_combo_->addItem("AES-256-CCM", "aes-256-ccm");
-  cipher_combo_->addItem("AES-256-XTS", "aes-256-xts");
-  cipher_combo_->addItem("AES-256-OCB", "aes-256-ocb");
-  cipher_combo_->addItem("TWOFISH-128-ECB", "twofish-128-ecb");
-  cipher_combo_->addItem("TWOFISH-128-CBC", "twofish-128-cbc");
-  cipher_combo_->addItem("TWOFISH-128-CFB", "twofish-128-cfb");
-  cipher_combo_->addItem("TWOFISH-128-OFB", "twofish-128-ofb");
-  cipher_combo_->addItem("TWOFISH-128-CTR", "twofish-128-ctr");
-  cipher_combo_->addItem("TWOFISH-192-ECB", "twofish-192-ecb");
-  cipher_combo_->addItem("TWOFISH-192-CBC", "twofish-192-cbc");
-  cipher_combo_->addItem("TWOFISH-192-CFB", "twofish-192-cfb");
-  cipher_combo_->addItem("TWOFISH-192-OFB", "twofish-192-ofb");
-  cipher_combo_->addItem("TWOFISH-192-CTR", "twofish-192-ctr");
-  cipher_combo_->addItem("TWOFISH-256-ECB", "twofish-256-ecb");
-  cipher_combo_->addItem("TWOFISH-256-CBC", "twofish-256-cbc");
-  cipher_combo_->addItem("TWOFISH-256-CFB", "twofish-256-cfb");
-  cipher_combo_->addItem("TWOFISH-256-OFB", "twofish-256-ofb");
-  cipher_combo_->addItem("TWOFISH-256-CTR", "twofish-256-ctr");
-  cipher_combo_->addItem("DES-ECB", "des-ecb");
-  cipher_combo_->addItem("DES-CBC", "des-cbc");
-  cipher_combo_->addItem("DES-CFB", "des-cfb");
-  cipher_combo_->addItem("DES-OFB", "des-ofb");
-  cipher_combo_->addItem("DES-CTR", "des-ctr");
-  cipher_combo_->addItem("RC4", "rc4");
-  cipher_combo_->addItem("RC4-40", "rc4-40");
-  cipher_combo_->addItem("RC4-128", "rc4-128");
-
-  auto* gost_mode_label = new QLabel("Режим ГОСТ:", encrypt_box);
-  gost_mode_combo_ = new QComboBox(encrypt_box);
-  gost_mode_combo_->addItem("CTR");
-  gost_mode_combo_->addItem("CFB");
-  gost_mode_combo_->addItem("OFB");
-  gost_mode_combo_->addItem("CBC");
-  gost_mode_combo_->addItem("ECB");
-  gost_mode_combo_->setToolTip("Режим задается для интерфейса. Фактическая реализация определяется бинарником ГОСТ.");
+  cipher_combo_->addItem("Кузнечик MGM", "kuznechik");
+  cipher_combo_->addItem("AES-GCM", "aes-256-gcm");
 
   hash_combo_ = new QComboBox(encrypt_box);
   hash_combo_->addItem("SHA-256", "sha256");
@@ -269,23 +205,10 @@ MainWindow::MainWindow(const cipheator::ClientConfig& config,
 
   encrypt_layout->addWidget(new QLabel("Алгоритм:", encrypt_box));
   encrypt_layout->addWidget(cipher_combo_);
-  encrypt_layout->addWidget(gost_mode_label);
-  encrypt_layout->addWidget(gost_mode_combo_);
   encrypt_layout->addWidget(new QLabel("Хэш:", encrypt_box));
   encrypt_layout->addWidget(hash_combo_);
   encrypt_layout->addWidget(new QLabel("Хранение ключа:", encrypt_box));
   encrypt_layout->addWidget(key_storage_combo_);
-
-  auto update_gost_mode_visibility = [this, gost_mode_label]() {
-    const QString value = cipher_combo_->currentData().toString();
-    const bool gost = is_gost_cipher_value(value);
-    gost_mode_label->setVisible(gost);
-    gost_mode_combo_->setVisible(gost);
-    gost_mode_combo_->setEnabled(gost);
-  };
-  connect(cipher_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          this, [update_gost_mode_visibility](int) { update_gost_mode_visibility(); });
-  update_gost_mode_visibility();
 
   auto* decrypt_box = new QGroupBox("Расшифрование", central);
   auto* decrypt_layout = new QHBoxLayout(decrypt_box);
@@ -370,10 +293,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
   }
 
-  if (!promptPasswordChangeUnified()) {
-    closing_ = false;
-    event->ignore();
-    return;
+  if (password_expired_) {
+    if (!promptPasswordChangeUnified()) {
+      closing_ = false;
+      event->ignore();
+      return;
+    }
   }
 
   event->accept();
@@ -413,8 +338,16 @@ void MainWindow::onEncrypt() {
     if (!client_.encrypt_file(params, &result)) {
       addStatus("Ошибка шифрования: " + QString::fromStdString(result.message));
       QMessageBox::warning(this, "Шифрование", "Ошибка: " + QString::fromStdString(result.message));
+      if (result.error_code == "password_expired") {
+        password_expired_ = true;
+        if (promptPasswordChangeUnified()) {
+          password_expired_ = false;
+        }
+      }
+      registerAuthFailure(result.error_code);
       continue;
     }
+    auth_failures_ = 0;
     addStatus("Зашифровано: " + path);
   }
 }
@@ -436,6 +369,13 @@ void MainWindow::onDecrypt() {
     if (!client_.decrypt_file(params, &result)) {
       addStatus("Ошибка расшифрования: " + QString::fromStdString(result.message));
       QMessageBox::warning(this, "Расшифрование", "Ошибка: " + QString::fromStdString(result.message));
+      if (result.error_code == "password_expired") {
+        password_expired_ = true;
+        if (promptPasswordChangeUnified()) {
+          password_expired_ = false;
+        }
+      }
+      registerAuthFailure(result.error_code);
       continue;
     }
 
@@ -465,6 +405,7 @@ void MainWindow::onDecrypt() {
     }
   }
 
+  auth_failures_ = 0;
   updateSecureState();
 }
 
@@ -663,6 +604,8 @@ bool MainWindow::promptPasswordChangeUnified() {
     return false;
   }
   password_ = new_pass->text();
+  auth_failures_ = 0;
+  password_expired_ = false;
   return true;
 }
 
@@ -677,6 +620,27 @@ void MainWindow::addStatus(const QString& text) {
   if (status_label_) {
     status_label_->setText(text);
   }
+}
+
+void MainWindow::registerAuthFailure(const std::string& code) {
+  if (code != "auth_failed") return;
+  auth_failures_ += 1;
+  if (auth_failures_ >= 5) {
+    clearSessionKey();
+  }
+  if (auth_failures_ >= 3) {
+    reencryptAll();
+    QMessageBox::critical(this, "Безопасность",
+                          "АРМ заблокирован до перезапуска устройства.");
+    QApplication::quit();
+  }
+}
+
+void MainWindow::clearSessionKey() {
+  if (!password_.isEmpty()) {
+    cipheator::secure_zero(password_.data(), static_cast<size_t>(password_.size()) * sizeof(QChar));
+  }
+  password_.clear();
 }
 
 QStringList MainWindow::selectedFilePaths() const {

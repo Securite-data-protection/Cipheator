@@ -65,6 +65,9 @@ class SecurityMonitor {
                       size_t bytes);
   bool is_locked(const std::string& username, int64_t* remaining_sec);
   bool unlock_user(const std::string& username);
+  bool reduce_lock(const std::string& username, int64_t max_remaining_sec);
+  void update_config(const MonitorConfig& cfg);
+  MonitorConfig current_config();
 
   std::vector<std::string> dump_stats(size_t limit);
   std::vector<std::string> dump_locks(size_t limit);

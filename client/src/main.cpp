@@ -3,10 +3,19 @@
 #include "client_core.h"
 
 #include "cipheator/config.h"
+#include "cipheator/pki.h"
 
 #include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QIcon>
+#include <QLineEdit>
 #include <QMessageBox>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QPushButton>
+#include <QObject>
 
 #include <filesystem>
 #include <fstream>
@@ -16,6 +25,27 @@
 #include <vector>
 
 namespace {
+
+std::string lock_file_path() {
+  std::error_code ec;
+  auto base = std::filesystem::temp_directory_path(ec);
+  if (ec) {
+    base = std::filesystem::current_path();
+  }
+  return (base / "cipheator_login_lock").string();
+}
+
+bool is_device_locked() {
+  std::error_code ec;
+  return std::filesystem::exists(lock_file_path(), ec);
+}
+
+void set_device_lock() {
+  std::ofstream out(lock_file_path(), std::ios::trunc);
+  if (out) {
+    out << "locked\n";
+  }
+}
 
 std::string trim(const std::string& s) {
   size_t start = s.find_first_not_of(" \t\r\n");
@@ -102,6 +132,133 @@ bool update_config_values(const std::string& path,
   for (const auto& line : lines) {
     out << line << "\n";
   }
+  return true;
+}
+
+bool prompt_password_change(QWidget* parent, QString* new_password_out) {
+  if (!new_password_out) return false;
+  QDialog dialog(parent);
+  dialog.setWindowTitle("Смена пароля");
+  dialog.setMinimumWidth(500);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* form = new QFormLayout();
+  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  form->setHorizontalSpacing(14);
+  form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+  auto* new_pass = new QLineEdit(&dialog);
+  auto* confirm = new QLineEdit(&dialog);
+  new_pass->setEchoMode(QLineEdit::Password);
+  confirm->setEchoMode(QLineEdit::Password);
+
+  auto* new_pass_label = new QLabel("Новый пароль:", &dialog);
+  auto* confirm_label = new QLabel("Подтверждение:", &dialog);
+  new_pass_label->setMinimumWidth(140);
+  confirm_label->setMinimumWidth(140);
+  form->addRow(new_pass_label, new_pass);
+  form->addRow(confirm_label, confirm);
+  layout->addLayout(form);
+
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  if (auto* ok_btn = buttons->button(QDialogButtonBox::Ok)) {
+    ok_btn->setText("ОК");
+  }
+  if (auto* cancel_btn = buttons->button(QDialogButtonBox::Cancel)) {
+    cancel_btn->setText("Отмена");
+  }
+  QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+
+  if (dialog.exec() != QDialog::Accepted) {
+    return false;
+  }
+  if (new_pass->text().isEmpty()) {
+    QMessageBox::warning(parent, "Смена пароля", "Пароль не может быть пустым");
+    return false;
+  }
+  if (new_pass->text() != confirm->text()) {
+    QMessageBox::warning(parent, "Смена пароля", "Пароли не совпадают");
+    return false;
+  }
+  *new_password_out = new_pass->text();
+  return true;
+}
+
+bool ensure_client_tls(cipheator::ClientConfig* cfg,
+                       const std::string& config_path,
+                       const std::string& enroll_token,
+                       int enroll_port,
+                       std::string* err) {
+  if (!cfg) return false;
+  std::filesystem::path base = config_path.empty()
+                                  ? std::filesystem::current_path()
+                                  : std::filesystem::path(config_path).parent_path();
+  std::filesystem::path cert_dir = base / "certs";
+  std::error_code ec;
+  std::filesystem::create_directories(cert_dir, ec);
+
+  if (cfg->client_key.empty()) {
+    cfg->client_key = (cert_dir / "client.key").string();
+  }
+  if (cfg->client_cert.empty()) {
+    cfg->client_cert = (cert_dir / "client.crt").string();
+  }
+  if (cfg->ca_file.empty()) {
+    cfg->ca_file = (cert_dir / "ca.crt").string();
+  }
+
+  bool key_ok = std::filesystem::exists(cfg->client_key, ec);
+  bool cert_ok = std::filesystem::exists(cfg->client_cert, ec);
+  bool ca_ok = std::filesystem::exists(cfg->ca_file, ec);
+  if (key_ok && cert_ok && ca_ok) return true;
+
+  if (!key_ok) {
+    std::string gen_err;
+    if (!cipheator::generate_rsa_key(cfg->client_key, 2048, &gen_err)) {
+      if (err) *err = "Не удалось создать ключ: " + gen_err;
+      return false;
+    }
+  }
+
+  std::filesystem::path csr_path = cert_dir / "client.csr";
+  cipheator::CertSubject subject;
+  subject.common_name = "cipheator-client";
+  std::string csr_err;
+  if (!cipheator::generate_csr(cfg->client_key, csr_path.string(), subject, &csr_err)) {
+    if (err) *err = "Не удалось создать CSR: " + csr_err;
+    return false;
+  }
+
+  std::string csr_pem;
+  if (!cipheator::read_text_file(csr_path.string(), &csr_pem, &csr_err)) {
+    if (err) *err = "Не удалось прочитать CSR: " + csr_err;
+    return false;
+  }
+
+  cipheator::ClientConfig enroll_cfg = *cfg;
+  enroll_cfg.port = enroll_port > 0 ? enroll_port : cfg->port;
+  enroll_cfg.verify_peer = false;
+  enroll_cfg.client_cert.clear();
+  enroll_cfg.client_key.clear();
+
+  cipheator::ClientCore enroll_client(enroll_cfg);
+  cipheator::EnrollResult enroll;
+  if (!enroll_client.enroll_certificate("client", enroll_token, csr_pem, &enroll)) {
+    if (err) *err = enroll.message.empty() ? "Ошибка регистрации TLS" : enroll.message;
+    return false;
+  }
+
+  std::string write_err;
+  if (!cipheator::write_text_file(cfg->client_cert, enroll.cert_pem, &write_err)) {
+    if (err) *err = "Не удалось сохранить сертификат: " + write_err;
+    return false;
+  }
+  if (!cipheator::write_text_file(cfg->ca_file, enroll.ca_pem, &write_err)) {
+    if (err) *err = "Не удалось сохранить CA: " + write_err;
+    return false;
+  }
+
   return true;
 }
 
@@ -254,14 +411,37 @@ int main(int argc, char** argv) {
   client_cfg.clipboard_max_bytes = static_cast<size_t>(config.get_int("clipboard_max_bytes", 0));
   client_cfg.decrypt_to_temp = config.get_bool("decrypt_to_temp", false);
   client_cfg.demo_mode = config.get_bool("demo_mode", false);
+  std::string enroll_token = config.get("enroll_token");
+  int enroll_port = config.get_int("enroll_port", 7445);
+  uint64_t last_policy_version = 0;
+  try {
+    last_policy_version = static_cast<uint64_t>(std::stoull(config.get("last_policy_version", "0")));
+  } catch (...) {
+    last_policy_version = 0;
+  }
 
   if (!loaded) {
     QMessageBox::warning(nullptr, "ПАК АС",
                          "Файл config/client.conf не найден. Используются значения по умолчанию; TLS может не работать.");
   }
 
+  std::string enroll_err;
+  if (!ensure_client_tls(&client_cfg, config_path, enroll_token, enroll_port, &enroll_err)) {
+    QMessageBox::critical(nullptr, "Вход в систему",
+                          "Ошибка регистрации TLS: " + QString::fromStdString(enroll_err));
+    return 1;
+  }
+
+  if (is_device_locked()) {
+    QMessageBox::critical(nullptr, "Вход в систему",
+                          "АРМ заблокирован до перезапуска устройства.");
+    return 1;
+  }
+
   QString session_user;
   QString session_pass;
+  int login_failures = 0;
+  uint64_t policy_version = 0;
   for (;;) {
     LoginDialog login;
     login.setDefaults(QString::fromStdString(client_cfg.host), client_cfg.port);
@@ -274,23 +454,83 @@ int main(int argc, char** argv) {
 
     cipheator::ClientCore auth_client(client_cfg);
     std::string auth_err;
+    std::string auth_code;
     if (!auth_client.authenticate(login.username().toStdString(),
                                   login.password().toStdString(),
-                                  &auth_err)) {
+                                  &auth_err,
+                                  &auth_code,
+                                  &policy_version)) {
+      if (auth_code == "password_expired") {
+        QString new_password;
+        if (!prompt_password_change(nullptr, &new_password)) {
+          QMessageBox::warning(nullptr, "Вход в систему",
+                               "Пароль просрочен. Требуется смена пароля.");
+          continue;
+        }
+        std::string change_err;
+        if (!auth_client.change_password(login.username().toStdString(),
+                                         login.password().toStdString(),
+                                         new_password.toStdString(),
+                                         &change_err)) {
+          QMessageBox::warning(nullptr, "Смена пароля",
+                               "Ошибка: " + QString::fromStdString(change_err));
+          continue;
+        }
+        std::string reauth_err;
+        std::string reauth_code;
+        if (!auth_client.authenticate(login.username().toStdString(),
+                                      new_password.toStdString(),
+                                      &reauth_err,
+                                      &reauth_code,
+                                      &policy_version)) {
+          QMessageBox::warning(nullptr, "Вход в систему",
+                               "Ошибка авторизации: " + QString::fromStdString(reauth_err));
+          continue;
+        }
+        session_user = login.username();
+        session_pass = new_password;
+        break;
+      }
+
+      if (auth_code == "auth_failed") {
+        login_failures += 1;
+        if (login_failures >= 3) {
+          set_device_lock();
+          QMessageBox::critical(nullptr, "Вход в систему",
+                                "АРМ заблокирован до перезапуска устройства.");
+          return 1;
+        }
+      }
       QMessageBox::warning(nullptr, "Вход в систему",
                            "Ошибка авторизации: " + QString::fromStdString(auth_err));
       continue;
     }
 
+    login_failures = 0;
     session_user = login.username();
     session_pass = login.password();
     break;
   }
 
-  update_config_values(config_path, {
+  if (policy_version > last_policy_version) {
+    QMessageBox::information(nullptr, "Вход в систему",
+                             "Политики безопасности были обновлены администратором.");
+    last_policy_version = policy_version;
+  }
+
+  std::vector<std::pair<std::string, std::string>> updates = {
       {"server_host", client_cfg.host},
-      {"server_port", std::to_string(client_cfg.port)}
-  });
+      {"server_port", std::to_string(client_cfg.port)},
+      {"ca_file", client_cfg.ca_file},
+      {"client_cert", client_cfg.client_cert},
+      {"client_key", client_cfg.client_key},
+      {"enroll_port", std::to_string(enroll_port)},
+      {"last_policy_version", std::to_string(last_policy_version)}
+  };
+  if (!enroll_token.empty()) {
+    updates.push_back({"enroll_token", enroll_token});
+  }
+  update_config_values(config_path, updates);
 
   MainWindow window(client_cfg, session_user, session_pass);
   window.show();

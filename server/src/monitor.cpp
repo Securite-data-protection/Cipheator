@@ -347,6 +347,36 @@ bool SecurityMonitor::unlock_user(const std::string& username) {
   return true;
 }
 
+bool SecurityMonitor::reduce_lock(const std::string& username, int64_t max_remaining_sec) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = stats_.find(username);
+  if (it == stats_.end()) return false;
+  const int64_t now = now_epoch_sec();
+  if (it->second.lock_until_ts <= now) return false;
+
+  int64_t remaining = it->second.lock_until_ts - now;
+  if (remaining > max_remaining_sec) {
+    it->second.lock_until_ts = now + max_remaining_sec;
+  }
+  if (audit_) {
+    audit_->log_event("user_lock_reduced", username,
+                      "remaining=" + std::to_string(remaining) +
+                      " max=" + std::to_string(max_remaining_sec));
+  }
+  save_stats();
+  return true;
+}
+
+void SecurityMonitor::update_config(const MonitorConfig& cfg) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  cfg_ = cfg;
+}
+
+MonitorConfig SecurityMonitor::current_config() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return cfg_;
+}
+
 std::vector<std::string> SecurityMonitor::dump_stats(size_t limit) {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<std::string> out;
